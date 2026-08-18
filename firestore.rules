@@ -1,0 +1,70 @@
+rules_version = '2';
+
+// Deploy via Firebase console (Firestore → Rules) or:
+//   firebase deploy --only firestore:rules
+//
+// Data model this protects:
+//   users/{uid}                      — profile
+//   users/{uid}/integrations/meta    — Meta connection METADATA (no token)
+//   users/{uid}/settings/global      — per-user settings (may hold AI keys)
+//   campaigns/{campaignId}           — shared team workspace
+//   settings/global                  — shared org-wide settings
+//   serverSecrets/{uid}              — Meta access token, backend-only (denied below)
+//
+// Keep the team allowlist below in sync with the AUTHORIZED_EMAILS /
+// AUTHORIZED_EMAIL_DOMAINS env vars used by the API routes.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── DEPLOYMENT CONFIG: your team allowlist ──────────────────────────
+    // This is the ONE place to edit per deployment. Keep it in sync with the
+    // AUTHORIZED_EMAILS / AUTHORIZED_EMAIL_DOMAINS env vars (rules can't read
+    // env, so the allowlist is duplicated here by necessity). Firestore rules
+    // must be redeployed to take effect: firebase deploy --only firestore:rules
+    function isTeamMember() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        // EDIT FOR YOUR TEAM: replace with your domain and/or individual emails.
+        && (request.auth.token.email.matches('.*@your-company[.]com$')
+            || request.auth.token.email == 'teammate@example.com');
+    }
+
+    function isOwner(uid) {
+      return isTeamMember() && request.auth.uid == uid;
+    }
+
+    // Per-user data: profile, integrations (Meta token!), personal settings.
+    // Owner-only — teammates must not be able to read each other's tokens.
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      match /{subcollection=**} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // Shared campaign workspace — any team member can read and edit.
+    // Concurrent-edit protection is handled in-app via lock fields.
+    match /campaigns/{campaignId} {
+      allow read, write: if isTeamMember();
+    }
+
+    // Org-wide settings (brand voice, naming templates, default ad account).
+    match /settings/global {
+      allow read, write: if isTeamMember();
+    }
+
+    // Server-only secrets: the Meta long-lived token, keyed by uid. Written and
+    // read exclusively by the backend via Workload Identity (which uses IAM and
+    // bypasses these rules). No client — not even the owner — may touch it.
+    match /serverSecrets/{uid} {
+      allow read, write: if false;
+    }
+
+    // Everything else is denied.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

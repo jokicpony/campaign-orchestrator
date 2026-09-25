@@ -48,6 +48,7 @@ export interface MetaCampaign {
     objective: string;
     dailyBudget?: number;
     lifetimeBudget?: number;
+    specialAdCategories?: string[]; // Credit/Employment/Housing/etc. — restricts ad set targeting
 }
 
 /**

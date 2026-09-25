@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
 import { requireMetaToken } from '@/lib/server/metaAuth';
-import { getTopPerformers } from '@/lib/meta/client';
+import { getTopPerformers, isMetaTokenError } from '@/lib/meta/client';
 import { logger, serializeError } from '@/lib/logger';
 import { MetaDatePreset } from '@/lib/meta/types';
 
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
         const message = error instanceof Error ? error.message : 'Unknown error';
 
         // Check for token expiration
-        if (message.includes('expired') || message.includes('invalid')) {
+        if (isMetaTokenError(error)) {
             return NextResponse.json(
                 { error: 'Meta token expired. Please reconnect your account.', code: 'TOKEN_EXPIRED' },
                 { status: 401 }

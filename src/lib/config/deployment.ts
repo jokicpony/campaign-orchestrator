@@ -18,3 +18,11 @@
  * floor stays safe even if the setting is ever missing.
  */
 export const DEFAULT_AGE_MIN = 18;
+
+/**
+ * Countries every ad set targets. The publish wizard doesn't expose geo
+ * targeting yet, so this is also the country list Meta requires on campaigns
+ * with a special ad category (`special_ad_category_country`) — keep the two
+ * in sync by using this constant for both.
+ */
+export const DEFAULT_TARGET_COUNTRIES = ['US'];

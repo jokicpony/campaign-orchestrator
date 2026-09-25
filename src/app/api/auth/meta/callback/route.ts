@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exchangeForLongLivedToken, getUserInfo, getAdAccounts, getPages, getInstagramAccounts } from '@/lib/meta/client';
+import { exchangeForLongLivedToken, getUserInfo, getAdAccounts, getPages } from '@/lib/meta/client';
 import { GRAPH_API_BASE } from '@/lib/meta/constants';
 import { setMetaToken } from '@/lib/server/metaTokenStore';
 import { logger, serializeError } from '@/lib/logger';
@@ -107,30 +107,11 @@ export async function GET(request: NextRequest) {
         // Step 4: Get ad accounts
         const adAccounts = await getAdAccounts(accessToken);
 
-        // Step 5: Get Facebook Pages (for ad publishing)
+        // Step 5: Get Facebook Pages (for ad publishing). Each Page carries its
+        // own linked IG account ID, which is what instagram_user_id expects —
+        // keep them per-Page so multi-brand users publish under the right account.
         const pages = await getPages(accessToken);
-
-        // Step 6: Get Instagram accounts from the ad account (correct IDs for Marketing API)
-        // The Pages API instagram_business_account.id returns a Graph node ID that doesn't
-        // work with the Marketing API. The ad account endpoint returns the actual IG actor IDs.
         const selectedAdAccountId = adAccounts.length > 0 ? adAccounts[0].id : null;
-        if (selectedAdAccountId) {
-            const igAccounts = await getInstagramAccounts(accessToken, selectedAdAccountId);
-            if (igAccounts.length > 0) {
-                const igActorId = igAccounts[0].id;
-                logger.info('auth', 'Found Instagram account from ad account endpoint', {
-                    igActorId,
-                    username: igAccounts[0].username,
-                    pagesIgId: pages[0]?.instagramAccountId || '(none)',
-                });
-                // Override the Pages API value with the correct ad account IG actor ID
-                pages.forEach(page => {
-                    if (page.instagramAccountId) {
-                        page.instagramAccountId = igActorId;
-                    }
-                });
-            }
-        }
 
         // Store the long-lived token server-side — it is never sent to the
         // browser, never written to a client-readable doc, never in a request body.

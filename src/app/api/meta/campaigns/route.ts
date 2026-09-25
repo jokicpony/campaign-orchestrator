@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
 import { requireMetaToken } from '@/lib/server/metaAuth';
-import { getCampaigns } from '@/lib/meta/client';
+import { getCampaigns, isMetaTokenError } from '@/lib/meta/client';
 import { logger, serializeError } from '@/lib/logger';
 
 export async function POST(request: NextRequest) {
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
         logger.error('meta', 'Failed to fetch campaigns', { error: serializeError(error) });
         const message = error instanceof Error ? error.message : 'Unknown error';
 
-        if (message.includes('expired') || message.includes('invalid')) {
+        if (isMetaTokenError(error)) {
             return NextResponse.json(
                 { error: 'Meta token expired. Please reconnect your account.', code: 'TOKEN_EXPIRED' },
                 { status: 401 }

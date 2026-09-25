@@ -9,6 +9,7 @@ import { requireMetaToken } from '@/lib/server/metaAuth';
 import { logger, serializeError, serializeMetaError } from '@/lib/logger';
 
 import { GRAPH_API_BASE } from '@/lib/meta/constants';
+import { DEFAULT_TARGET_COUNTRIES } from '@/lib/config/deployment';
 
 export async function POST(request: NextRequest) {
     const authed = await requireAuth(request);
@@ -75,6 +76,9 @@ export async function POST(request: NextRequest) {
         // Only add special_ad_categories if not empty
         if (specialAdCategories && specialAdCategories.length > 0) {
             campaignPayload.special_ad_categories = JSON.stringify(specialAdCategories);
+            // Meta requires the countries a special-category campaign runs in;
+            // these match the ad set's geo targeting.
+            campaignPayload.special_ad_category_country = JSON.stringify(DEFAULT_TARGET_COUNTRIES);
         } else {
             campaignPayload.special_ad_categories = JSON.stringify([]);
         }

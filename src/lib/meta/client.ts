@@ -64,13 +64,13 @@ async function graphFetch<T>(
         ? endpoint
         : `${GRAPH_API_BASE}${endpoint}`;
 
-    const separator = url.includes('?') ? '&' : '?';
-    const fullUrl = `${url}${separator}access_token=${accessToken}`;
-
-    const response = await fetch(fullUrl, {
+    // Token goes in the Authorization header, not the URL, so it can't leak
+    // into request logs. (Meta's paging.next URLs embed their own token.)
+    const response = await fetch(url, {
         ...options,
         headers: {
             'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
             ...options?.headers,
         },
     });

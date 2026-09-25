@@ -758,6 +758,19 @@ export function PublishWizard({
                         };
                     }
 
+                    // Every other type must also get every asset it was built with —
+                    // publishing a flexible ad with some assets silently missing
+                    // isn't the ad the strategist assembled
+                    if (!isCarousel && orderedCards.length < assetsToUpload.length) {
+                        return {
+                            rowId: ad.id,
+                            adName,
+                            success: false,
+                            error: 'Some assets failed to upload',
+                            errorDetail: `Only ${orderedCards.length} of ${assetsToUpload.length} asset(s) uploaded successfully, so the ad wasn't published with a partial set. Check the failed transfers (often an expired Drive session — try reconnecting Drive) and republish.`,
+                        };
+                    }
+
                     // Extract text from SlotItems (SlotItem has localText or masterItem.text)
                     const getSlotText = (slot: { localText?: string; masterItem: { text: string } } | null): string | null => {
                         if (!slot) return null;

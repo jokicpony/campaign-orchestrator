@@ -66,7 +66,8 @@ async function waitForVideoReady(
 ): Promise<{ status: 'ready' | 'error' | 'timeout'; thumbnailUrl: string | null }> {
     for (let attempt = 1; attempt <= MAX_VIDEO_POLL_ATTEMPTS; attempt++) {
         const statusRes = await fetch(
-            `${GRAPH_API_BASE}/${videoId}?fields=status,picture&access_token=${accessToken}`
+            `${GRAPH_API_BASE}/${videoId}?fields=status,picture`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
         );
         const statusData = await statusRes.json();
         const videoStatus = statusData.status?.video_status;
@@ -216,15 +217,9 @@ export async function POST(request: NextRequest) {
             logger.warn('publish', 'Could not fetch ad set info', { sid, error: serializeError(e) });
         }
 
-        // Build the final destination URL with UTM parameters
-        let finalUrl = destinationUrl;
-        if (urlParameters) {
-            const separator = destinationUrl.includes('?') ? '&' : '?';
-            finalUrl = `${destinationUrl}${separator}${urlParameters}`;
-        }
-        logger.debug('publish', 'URL construction', { sid, urlParameters, finalUrl });
-
-        logger.debug('publish', 'Ad info', { sid, adType });
+        // UTM parameters are NOT appended to destinationUrl — each creative
+        // carries them in `url_tags` (see docs/FLEXIBLE_AD_IMPLEMENTATION.md).
+        logger.debug('publish', 'Ad info', { sid, adType, urlParameters });
 
         // Verify ALL referenced videos have finished processing before creating
         // the ad — a still-processing video can fail the whole creative, and

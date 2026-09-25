@@ -1,7 +1,7 @@
 # Meta Flexible Ad Format Implementation
 
 > Technical documentation for the Meta Marketing API flexible ad publishing implementation.
-> Last updated: July 2026
+> Last updated: September 2026
 
 ## Overview
 
@@ -20,7 +20,7 @@ This document details the implementation of **Flexible Ad Format** (formerly kno
 
 ### Endpoint
 ```
-POST https://graph.facebook.com/v24.0/act_<AD_ACCOUNT_ID>/ads
+POST https://graph.facebook.com/v25.0/act_<AD_ACCOUNT_ID>/ads
 ```
 
 ### Payload Structure

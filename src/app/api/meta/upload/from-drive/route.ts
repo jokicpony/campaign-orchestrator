@@ -149,9 +149,10 @@ export async function POST(request: NextRequest) {
             }
 
             const metaResponse = await fetch(
-                `${GRAPH_API_BASE}/${adAccountId}/adimages?access_token=${metaAccessToken}`,
+                `${GRAPH_API_BASE}/${adAccountId}/adimages`,
                 {
                     method: 'POST',
+                    headers: { Authorization: `Bearer ${metaAccessToken}` },
                     body: formData,
                 }
             );
@@ -217,9 +218,10 @@ export async function POST(request: NextRequest) {
             formData.append('source', blob, fileName || 'video.mp4');
 
             const metaResponse = await fetch(
-                `${GRAPH_API_BASE}/${adAccountId}/advideos?access_token=${metaAccessToken}`,
+                `${GRAPH_API_BASE}/${adAccountId}/advideos`,
                 {
                     method: 'POST',
+                    headers: { Authorization: `Bearer ${metaAccessToken}` },
                     body: formData,
                 }
             );

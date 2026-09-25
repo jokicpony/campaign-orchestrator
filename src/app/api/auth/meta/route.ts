@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
         'ads_management',        // Create/manage ads
         'business_management',   // Access Business Manager and ad accounts
         'pages_read_engagement', // Access Facebook Pages for ad publishing
+        'pages_show_list',       // List the user's Pages (/me/accounts) — a required dependency of the above
     ].join(',');
 
     // CSRF protection: random state, echoed back by Facebook and checked

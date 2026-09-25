@@ -151,8 +151,12 @@ async function uploadToMeta(
     formData.append('source', blob, uploadName);
 
     const metaUploadRes = await fetch(
-        `${GRAPH_API_BASE}/${adAccountId}/advideos?access_token=${metaAccessToken}`,
-        { method: 'POST', body: formData },
+        `${GRAPH_API_BASE}/${adAccountId}/advideos`,
+        {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${metaAccessToken}` },
+            body: formData,
+        },
     );
 
     const metaData = await metaUploadRes.json() as { id?: string; error?: { message?: string } };
@@ -306,10 +310,12 @@ ff.http('transcodeAndUpload', async (req: Request, res: Response) => {
 });
 
 /**
- * Extract file extension from a filename, defaulting to .mp4
+ * Extract file extension from a filename, defaulting to .mp4. The result is
+ * used in a temp file path, so only a short alphanumeric extension is accepted —
+ * anything else (e.g. "a./../../x") falls back to .mp4 rather than letting a
+ * caller-supplied name steer the path outside tmpdir.
  */
 function getExtension(fileName?: string): string {
-    if (!fileName || !fileName.includes('.')) return '.mp4';
-    const ext = fileName.split('.').pop()?.toLowerCase();
-    return ext ? `.${ext}` : '.mp4';
+    const ext = fileName?.split('.').pop()?.toLowerCase();
+    return fileName?.includes('.') && ext && /^[a-z0-9]{1,5}$/.test(ext) ? `.${ext}` : '.mp4';
 }

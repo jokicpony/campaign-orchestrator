@@ -92,10 +92,10 @@ const OBJECTIVES: {
     ];
 
 const SPECIAL_AD_CATEGORIES: { id: SpecialAdCategory; label: string }[] = [
-    { id: 'CREDIT', label: 'Credit' },
+    { id: 'FINANCIAL_PRODUCTS_SERVICES', label: 'Financial Products & Services' },
     { id: 'EMPLOYMENT', label: 'Employment' },
     { id: 'HOUSING', label: 'Housing' },
-    { id: 'SOCIAL_ISSUES_ELECTIONS_OR_POLITICS', label: 'Social Issues / Elections / Politics' },
+    { id: 'ISSUES_ELECTIONS_POLITICS', label: 'Social Issues / Elections / Politics' },
 ];
 
 const CONVERSION_EVENTS: { id: ConversionEvent; label: string; description: string }[] = [

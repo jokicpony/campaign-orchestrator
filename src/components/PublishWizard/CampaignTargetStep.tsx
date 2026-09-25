@@ -21,6 +21,7 @@ interface MetaCampaign {
     objective: string;
     dailyBudget?: number;    // present when the campaign uses CBO
     lifetimeBudget?: number; // present when the campaign uses CBO
+    specialAdCategories?: string[];
 }
 
 interface MetaAdSet {
@@ -543,6 +544,7 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
                                                 existingCampaignName: campaign.name,
                                                 existingCampaignObjective: campaign.objective,
                                                 existingCampaignIsCBO: !!(campaign.dailyBudget || campaign.lifetimeBudget),
+                                                existingCampaignSpecialAdCategories: campaign.specialAdCategories || [],
                                                 existingAdSetId: undefined,
                                                 existingAdSetName: undefined,
                                             })}

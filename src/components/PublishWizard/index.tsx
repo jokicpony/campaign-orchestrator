@@ -80,7 +80,7 @@ export type OptimizationGoal =
     // Sales
     | 'OFFSITE_CONVERSIONS'
     | 'VALUE';
-export type SpecialAdCategory = 'CREDIT' | 'EMPLOYMENT' | 'HOUSING' | 'SOCIAL_ISSUES_ELECTIONS_OR_POLITICS';
+export type SpecialAdCategory = 'FINANCIAL_PRODUCTS_SERVICES' | 'EMPLOYMENT' | 'HOUSING' | 'ISSUES_ELECTIONS_POLITICS';
 export type ConversionEvent = 'PURCHASE' | 'ADD_TO_CART' | 'INITIATE_CHECKOUT' | 'COMPLETE_REGISTRATION' | 'LEAD' | 'OTHER';
 export type BudgetLevel = 'campaign' | 'adset';
 
@@ -110,6 +110,7 @@ export interface WizardSettings {
     existingCampaignName?: string;
     existingCampaignObjective?: string; // Objective of the selected existing campaign
     existingCampaignIsCBO?: boolean;    // Campaign manages budget (CBO) — new ad sets must not set one
+    existingCampaignSpecialAdCategories?: string[]; // Campaign's special ad categories — restrict new ad set targeting
     adSetMode?: AdSetMode;              // For existing campaigns: reuse an ad set or create a new one
     newAdSetName?: string;              // Name for the ad set when adSetMode === 'new'
     existingAdSetId?: string;
@@ -515,6 +516,7 @@ export function PublishWizard({
                         useIncrementalAttribution: false,
                         pageId: metaConnection.selectedPageId,
                         objective: settings.existingCampaignObjective,
+                        specialAdCategories: settings.existingCampaignSpecialAdCategories || [],
                         ageMin: globalSettings.defaultAgeMin,
                         startTime: settings.scheduledStartDate || undefined,
                     }),

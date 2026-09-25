@@ -28,6 +28,31 @@ function isMetaError(data: unknown): data is MetaApiError {
 }
 
 /**
+ * Error thrown by graphFetch. Carries Meta's numeric error code so callers can
+ * branch on it instead of pattern-matching the (localized, free-form) message.
+ */
+export class MetaGraphError extends Error {
+    code?: number;
+    subcode?: number;
+
+    constructor(message: string, code?: number, subcode?: number) {
+        super(message);
+        this.name = 'MetaGraphError';
+        this.code = code;
+        this.subcode = subcode;
+    }
+}
+
+/**
+ * True when Meta rejected the access token itself (expired, revoked, or
+ * malformed) — i.e. the user must reconnect. Meta reports all of these as
+ * OAuthException code 190; 102 is the legacy session-key equivalent.
+ */
+export function isMetaTokenError(error: unknown): boolean {
+    return error instanceof MetaGraphError && (error.code === 190 || error.code === 102);
+}
+
+/**
  * Make authenticated request to Meta Graph API
  */
 async function graphFetch<T>(
@@ -54,7 +79,11 @@ async function graphFetch<T>(
 
     if (isMetaError(data)) {
         logger.error('meta', 'API Error', { error: data.error });
-        throw new Error(`Meta API Error: ${data.error.message}`);
+        throw new MetaGraphError(
+            `Meta API Error: ${data.error.message}`,
+            data.error.code,
+            data.error.error_subcode
+        );
     }
 
     return data as T;
@@ -229,10 +258,17 @@ interface AssetBreakdownInsight {
     campaignId: string;
     campaignName: string;
     assetId: string;
+    assetText?: string; // Present when Meta returns the asset's text inline
     spend: number;
     impressions: number;
     clicks: number;
 }
+
+/**
+ * Value of a body_asset / title_asset breakdown. Meta returns an object
+ * ({ text, id }); the plain-string form is tolerated defensively.
+ */
+type BreakdownAssetValue = { id?: string; text?: string } | string;
 
 /**
  * Get insights with asset breakdown (body_asset or title_asset)
@@ -272,7 +308,8 @@ async function getInsightsWithAssetBreakdown(
             ad_name: string;
             campaign_id: string;
             campaign_name: string;
-            [key: string]: string; // body_asset or title_asset
+            body_asset?: BreakdownAssetValue;
+            title_asset?: BreakdownAssetValue;
             spend: string;
             impressions: string;
             clicks: string;
@@ -292,17 +329,23 @@ async function getInsightsWithAssetBreakdown(
         }
 
         const results = response.data
-            .filter(row => row[breakdown]) // Only include rows with the asset breakdown
-            .map((row) => ({
-                adId: row.ad_id,
-                adName: row.ad_name,
-                campaignId: row.campaign_id,
-                campaignName: row.campaign_name,
-                assetId: row[breakdown],
-                spend: parseFloat(row.spend) || 0,
-                impressions: parseInt(row.impressions) || 0,
-                clicks: parseInt(row.clicks) || 0,
-            }));
+            .map((row) => {
+                const asset = row[breakdown];
+                const assetId = typeof asset === 'string' ? asset : asset?.id ?? '';
+                const assetText = typeof asset === 'object' ? asset?.text || undefined : undefined;
+                return {
+                    adId: row.ad_id,
+                    adName: row.ad_name,
+                    campaignId: row.campaign_id,
+                    campaignName: row.campaign_name,
+                    assetId,
+                    assetText,
+                    spend: parseFloat(row.spend) || 0,
+                    impressions: parseInt(row.impressions) || 0,
+                    clicks: parseInt(row.clicks) || 0,
+                };
+            })
+            .filter(row => row.assetId || row.assetText); // Only include rows with the asset breakdown
 
         logger.debug('meta', `${breakdown} breakdown results`, { count: results.length });
         return results;
@@ -550,13 +593,14 @@ export async function getTopPerformers(
         limit
     );
 
-    // Step 3: Collect unique ad IDs to fetch asset texts
-    const allAdIds = new Set<string>();
-    bodyInsights.forEach(i => allAdIds.add(i.adId));
-    titleInsights.forEach(i => allAdIds.add(i.adId));
+    // Step 3: Collect ad IDs whose asset text wasn't returned inline — only
+    // those need their creative fetched to resolve the asset ID to text
+    const unresolvedAdIds = new Set<string>();
+    bodyInsights.forEach(i => { if (!i.assetText) unresolvedAdIds.add(i.adId); });
+    titleInsights.forEach(i => { if (!i.assetText) unresolvedAdIds.add(i.adId); });
 
     // Step 4: Fetch asset feed specs to resolve asset IDs to text
-    const assetFeeds = await getAssetFeedSpecs(accessToken, Array.from(allAdIds));
+    const assetFeeds = await getAssetFeedSpecs(accessToken, Array.from(unresolvedAdIds));
 
     // Step 5: Build results with actual copy text
     const results: MetaTopPerformer[] = [];
@@ -566,7 +610,7 @@ export async function getTopPerformers(
     // Process body (primary text) insights
     bodyInsights.forEach(insight => {
         const feed = assetFeeds.get(insight.adId);
-        const bodyText = feed?.bodies.get(insight.assetId);
+        const bodyText = insight.assetText || feed?.bodies.get(insight.assetId);
 
         // Debug: Log when we can't find a body text
         if (!bodyText && feed) {
@@ -593,7 +637,7 @@ export async function getTopPerformers(
     // Process title (headline) insights
     titleInsights.forEach(insight => {
         const feed = assetFeeds.get(insight.adId);
-        const titleText = feed?.titles.get(insight.assetId);
+        const titleText = insight.assetText || feed?.titles.get(insight.assetId);
 
         // Debug: Log when we can't find a title text
         if (!titleText && feed) {
@@ -670,9 +714,10 @@ export async function validateToken(accessToken: string): Promise<boolean> {
 /**
  * Get Facebook Pages accessible by the user
  * Required for publishing ads (ads must be associated with a Page)
- * Also fetches the linked Instagram Business Account ID for ad creation.
- * The instagram_business_account.id is the Graph API node ID that the
- * Marketing API expects for instagram_actor_id / instagram_user_id.
+ * Also fetches each Page's linked Instagram account. Its
+ * instagram_business_account.id is the IG User ID that the Marketing API's
+ * `instagram_user_id` expects (per Meta's instagram_actor_id → instagram_user_id
+ * migration guide), so each Page keeps its own IG identity.
  */
 export async function getPages(accessToken: string): Promise<MetaPage[]> {
     interface PageData {
@@ -710,43 +755,6 @@ export async function getPages(accessToken: string): Promise<MetaPage[]> {
 }
 
 /**
- * Get Instagram accounts connected to an ad account.
- * 
- * IMPORTANT: The Pages API `instagram_business_account.id` returns a Facebook
- * Graph node ID (e.g. 17841403278646568) which is NOT the Instagram actor ID
- * that the Marketing API expects. This endpoint returns the correct IDs that
- * match what Ads Manager displays (e.g. 1151534888198362).
- */
-export async function getInstagramAccounts(
-    accessToken: string,
-    adAccountId: string
-): Promise<Array<{ id: string; username?: string }>> {
-    interface IGAccountData {
-        id: string;
-        username?: string;
-    }
-
-    interface IGAccountsResponse {
-        data: IGAccountData[];
-    }
-
-    try {
-        const result = await graphFetch<IGAccountsResponse>(
-            `/${adAccountId}/instagram_accounts?fields=id,username`,
-            accessToken
-        );
-
-        return result.data || [];
-    } catch (error) {
-        logger.warn('meta', 'Failed to fetch Instagram accounts for ad account', {
-            adAccountId,
-            error: serializeError(error),
-        });
-        return [];
-    }
-}
-
-/**
  * Get campaigns for an ad account
  * Used in Publish Wizard to select existing campaigns
  */
@@ -762,6 +770,7 @@ export async function getCampaigns(
         objective: string;
         daily_budget?: string;
         lifetime_budget?: string;
+        special_ad_categories?: string[];
     }
 
     interface CampaignsResponse {
@@ -776,7 +785,7 @@ export async function getCampaigns(
         { field: 'effective_status', operator: 'IN', value: statusFilter }
     ]);
 
-    let nextUrl: string | null = `/${adAccountId}/campaigns?fields=id,name,status,objective,daily_budget,lifetime_budget&filtering=${encodeURIComponent(filtering)}&limit=100`;
+    let nextUrl: string | null = `/${adAccountId}/campaigns?fields=id,name,status,objective,daily_budget,lifetime_budget,special_ad_categories&filtering=${encodeURIComponent(filtering)}&limit=100`;
 
     while (nextUrl) {
         const result: CampaignsResponse = await graphFetch<CampaignsResponse>(nextUrl, accessToken);
@@ -789,6 +798,8 @@ export async function getCampaigns(
                 objective: campaign.objective,
                 dailyBudget: campaign.daily_budget ? parseInt(campaign.daily_budget) : undefined,
                 lifetimeBudget: campaign.lifetime_budget ? parseInt(campaign.lifetime_budget) : undefined,
+                // Meta may report "NONE" for an unrestricted campaign
+                specialAdCategories: (campaign.special_ad_categories || []).filter(c => c !== 'NONE'),
             }))
         );
 

@@ -9,7 +9,19 @@ import { requireMetaToken } from '@/lib/server/metaAuth';
 import { logger, serializeError, serializeMetaError } from '@/lib/logger';
 
 import { GRAPH_API_BASE } from '@/lib/meta/constants';
-import { DEFAULT_AGE_MIN } from '@/lib/config/deployment';
+import { DEFAULT_AGE_MIN, DEFAULT_TARGET_COUNTRIES } from '@/lib/config/deployment';
+
+// Special ad categories under Meta's housing/employment/financial rules: no
+// age or gender targeting, and (from Marketing API v26, applied to all
+// versions Oct 27 2026) an explicit targeting_automation.advantage_audience.
+// ISSUES_ELECTIONS_POLITICS is not restricted this way. CREDIT is the
+// pre-2025 name for FINANCIAL_PRODUCTS_SERVICES, kept for older campaigns.
+const RESTRICTED_TARGETING_CATEGORIES = new Set([
+    'HOUSING',
+    'EMPLOYMENT',
+    'FINANCIAL_PRODUCTS_SERVICES',
+    'CREDIT',
+]);
 
 /** Coerce an age to an integer within Meta's valid 13–65 targeting range. */
 function clampAge(value: unknown, fallback: number): number {
@@ -34,7 +46,7 @@ export async function POST(request: NextRequest) {
             dailyBudget, // In dollars — omitted when budgetLevel === 'campaign'
             optimizationGoal = 'OFFSITE_CONVERSIONS',
             billingEvent = 'IMPRESSIONS',
-            countries = ['US'],
+            countries = DEFAULT_TARGET_COUNTRIES,
             isASC = false,
             pixelId, // Required for conversion-optimized campaigns
             conversionEvent = 'PURCHASE',
@@ -43,8 +55,8 @@ export async function POST(request: NextRequest) {
             pageId, // Facebook Page ID — used as promoted_object for non-conversion objectives
             objective, // Campaign objective — determines promoted_object type
             startTime, // ISO 8601 scheduled start date for the ad set
-            specialAdCategories = [], // Credit/Employment/Housing — forbid age/gender targeting
-            ageMin = DEFAULT_AGE_MIN, // Age floor (deployment default, see config/deployment.ts); omitted for special categories
+            specialAdCategories = [], // Housing/Employment/Financial forbid age/gender targeting
+            ageMin = DEFAULT_AGE_MIN, // Age floor (deployment default, see config/deployment.ts); omitted for housing/employment/financial categories
             ageMax = 65,
         } = body;
 
@@ -124,14 +136,18 @@ export async function POST(request: NextRequest) {
         }
 
 
-        // Targeting. Special Ad Categories (Credit/Employment/Housing) FORBID age
-        // and gender restrictions — Meta rejects the ad set if age_min/age_max are
-        // present — so omit them there. Otherwise apply the configured age floor
-        // (DEFAULT_AGE_MIN, see config/deployment.ts). ASC uses geo-only + floor;
-        // Standard also sets an age ceiling.
-        const hasSpecialCategory = Array.isArray(specialAdCategories) && specialAdCategories.length > 0;
+        // Targeting. Housing/Employment/Financial categories FORBID age and
+        // gender restrictions — Meta rejects the ad set if age_min/age_max are
+        // present — so omit them there, and state advantage_audience explicitly
+        // (0 = no audience expansion, matching prior behavior). Otherwise apply
+        // the configured age floor (DEFAULT_AGE_MIN, see config/deployment.ts).
+        // ASC uses geo-only + floor; Standard also sets an age ceiling.
+        const hasRestrictedCategory = Array.isArray(specialAdCategories) &&
+            specialAdCategories.some((c: string) => RESTRICTED_TARGETING_CATEGORIES.has(c));
         const targeting: Record<string, unknown> = { geo_locations: { countries } };
-        if (!hasSpecialCategory) {
+        if (hasRestrictedCategory) {
+            targeting.targeting_automation = { advantage_audience: 0 };
+        } else {
             // Sanitize bounds so a bad/missing value can't produce an invalid ad
             // set: clamp to Meta's 13–65 range and never let the floor exceed the
             // ceiling. Standard ad sets get both; ASC uses the floor only.

@@ -121,8 +121,7 @@ async function waitForVideoReady(
  * 2. Create an ad creative (supports Dynamic Creative with multiple assets)
  * 3. Create the ad under the specified ad set
  * 
- * POST body: {
- *   accessToken: string,
+ * POST body (Meta token is read server-side via requireMetaToken): {
  *   adAccountId: string,       // Format: act_XXXXXXXXX
  *   adSetId: string,           // Target ad set ID
  *   pageId: string,            // Facebook Page ID for the ad
@@ -233,7 +232,7 @@ export async function POST(request: NextRequest) {
         }
 
         // UTM parameters are NOT appended to destinationUrl — each creative
-        // carries them in `url_tags` (see docs/FLEXIBLE_AD_IMPLEMENTATION.md).
+        // carries them in `url_tags` (see docs/META_API.md).
         logger.debug('publish', 'Ad info', { sid, adType, urlParameters });
 
         // Verify ALL referenced videos have finished processing before creating
@@ -287,7 +286,7 @@ export async function POST(request: NextRequest) {
         const isSingleAd = adType === 'single_image' || adType === 'single_video';
 
         if (adType === 'multi_media') {
-            // === MULTI-MEDIA: creative.media_sourcing_spec (docs/MULTI_MEDIA_ADS.md) ===
+            // === MULTI-MEDIA: creative.media_sourcing_spec (docs/META_API.md) ===
             // One ad, up to 10 images + videos. Item 0 is the primary media in
             // object_story_spec and is ALSO listed in the spec (Meta requires
             // both). Images sharing a `stack` become one group of orientation

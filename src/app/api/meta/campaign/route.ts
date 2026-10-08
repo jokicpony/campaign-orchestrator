@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
         // unified model derives Advantage+ state from automation settings, not a
         // creation flag. The "ASC" toggle therefore creates a standard
         // OUTCOME_SALES campaign — which is what has been publishing successfully.
-        // See docs/meta-campaign-api-notes.md.
+        // See docs/META_API.md.
         const campaignPayload: Record<string, string> = {
             name,
             objective: campaignType === 'ASC' ? 'OUTCOME_SALES' : objective,

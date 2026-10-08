@@ -1,7 +1,7 @@
 /**
  * Multi-media ads (creative.media_sourcing_spec) — Meta's documented successor
  * for "Single image or video" ads carrying an uploaded media group: up to 10
- * images + videos in ONE ad. See docs/MULTI_MEDIA_ADS.md.
+ * images + videos in ONE ad. See docs/META_API.md.
  *
  * Pure + client-safe: the builder row and publish wizard use buildStacks to
  * show/rename stacks, and the publish route builds the payload with

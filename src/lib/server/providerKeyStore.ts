@@ -9,7 +9,7 @@ import type { AIProvider } from '@/types';
  * (denied to all clients by firestore.rules; reachable only by the backend via
  * Workload Identity). Each user's keys are private to them — a teammate can't
  * read them, and they never reach any browser. Routes look them up by the
- * verified uid and fall back to server env vars. See docs/SECURITY.md.
+ * verified uid and fall back to server env vars. See docs/ARCHITECTURE.md.
  */
 
 const COLLECTION = 'serverSecrets';

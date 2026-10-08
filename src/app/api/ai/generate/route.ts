@@ -13,7 +13,7 @@ import { buildSystemPrompt, buildUserPrompt, buildIterationPrompt, buildCustomIt
 // Returns a Vercel AI SDK model instance based on provider + model ID.
 // Key precedence: the user's OWN key (stored server-side, owner-only) → server
 // env var fallback. Keys are never accepted from the client or a client-readable
-// doc. See docs/SECURITY.md.
+// doc. See docs/ARCHITECTURE.md.
 
 async function getModel(settings: GlobalPromptSettings | undefined, uid: string): Promise<LanguageModel> {
     const provider: AIProvider = settings?.aiProvider || 'google';

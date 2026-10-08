@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// Firebase Storage holds only the thumbnail cache (thumbnails/{driveFileId}.jpg,
+// src/lib/firebase/thumbnailCache.ts). Deploy with:
+//   npx firebase-tools deploy --only storage --project <project-id>
+//
+// Keep isTeamMember() in sync with firestore.rules and the AUTHORIZED_* env vars.
+// Note: download URLs from getDownloadURL carry a token that bypasses these
+// rules, so anyone holding a thumbnail URL can load that thumbnail.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // EDIT FOR YOUR TEAM: same allowlist as firestore.rules.
+    function isTeamMember() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && (request.auth.token.email.matches('.*@your-company[.]com$')
+            || request.auth.token.email == 'teammate@example.com');
+    }
+
+    match /thumbnails/{file} {
+      allow read: if isTeamMember();
+      allow write: if isTeamMember()
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

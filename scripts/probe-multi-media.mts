@@ -1,7 +1,7 @@
 /**
  * Live probe for multi-media ads (creative.media_sourcing_spec) — exercises
  * the SAME payload builder the publish route uses (src/lib/meta/multiMedia.ts).
- * Findings go in docs/MULTI_MEDIA_ADS.md.
+ * Findings go in docs/META_API.md.
  *
  * Token: META_TOKEN env var, or --from-firestore [uid or Meta name] to read
  * serverSecrets/{uid}.meta.accessToken via your gcloud login (uid optional

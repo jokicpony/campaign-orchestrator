@@ -29,7 +29,7 @@ export interface AuthedUser {
 // API to your team:
 //   AUTHORIZED_EMAILS="alice@x.com,bob@y.com"
 //   AUTHORIZED_EMAIL_DOMAINS="yourcompany.com"
-// Unset = any authenticated Firebase user is allowed (previous behavior).
+// Unset = DENIED in production (allowed in dev) unless ALLOW_ALL_AUTHENTICATED=true.
 const ALLOWED_EMAILS = new Set(
     (process.env.AUTHORIZED_EMAILS || '')
         .split(',')

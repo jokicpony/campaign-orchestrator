@@ -492,7 +492,7 @@ export interface GlobalPromptSettings {
     // verticals (e.g. alcohol) set 21; general-purpose deployments use 18.
     defaultAgeMin?: number;
     // AI Engine configuration (shared across team). NOTE: provider API keys are
-    // NOT stored here — they live server-side as env vars only (see docs/SECURITY.md).
+    // NOT stored here — they live server-side as env vars only (see docs/ARCHITECTURE.md → Who is allowed to do what).
     aiProvider?: AIProvider;                       // Active AI provider (google, anthropic, openai)
     aiModel?: string;                              // Active model ID within the provider
 }

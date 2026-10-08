@@ -17,7 +17,7 @@ export const maxDuration = 300;
  * 
  * POST body: {
  *   googleAccessToken: string,  // Google OAuth token
- *   metaAccessToken: string,    // Meta OAuth token
+ *   (Meta token: read server-side via requireMetaToken — never sent by the client)
  *   adAccountId: string,        // Meta ad account ID
  *   driveFileId: string,        // Google Drive file ID
  *   assetType: 'image' | 'video',

@@ -770,7 +770,12 @@ function ReviewCard({ row, index, onUpdateRow, userName, globalSettings, driveAc
             {/* Multi-media: stacks decide which shape serves where, so reviewers see them before approving */}
             {row.adType === 'multi_media' && row.assets.length > 0 && (
                 <div className="px-4 py-3 bg-background-tertiary border-t border-border">
-                    <MediaStacks assets={row.assets} size="md" />
+                    <MediaStacks
+                        assets={row.assets}
+                        size="lg"
+                        selectedIndex={selectedAssetIndex}
+                        onSelect={(i) => { setSelectedAssetIndex(i); setIsPlayingVideo(false); }}
+                    />
                 </div>
             )}
 

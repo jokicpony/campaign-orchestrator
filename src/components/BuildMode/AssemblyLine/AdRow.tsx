@@ -12,7 +12,7 @@ import { AssetPickerPopover } from '@/components/AssetPickerPopover';
 import { MediaStacks } from '@/components/MediaStacks';
 import { useAuth } from '@/components/AuthContext';
 import { CarouselPairingHint } from '@/components/CarouselPairingHint';
-import { shapeLabel } from '@/lib/meta/multiMedia';
+import { buildStacks, shapeLabel } from '@/lib/meta/multiMedia';
 
 // Portal-based tooltip that escapes overflow:hidden containers
 function PortalTooltip({ text, children }: { text: string; children: React.ReactNode }) {
@@ -348,6 +348,8 @@ export function AdRow({
 
     const currentTypeConfig = adTypesConfig.find(t => t.id === row.adType) || adTypesConfig[0];
     const maxAssets = currentTypeConfig?.maxAssets || 10;
+    const showStacks = row.adType === 'multi_media' && row.assets.length > 0;
+    const stackCount = useMemo(() => (showStacks ? buildStacks(row.assets).length : 0), [showStacks, row.assets]);
 
     // Handle ad type change with limit enforcement
     const handleTypeChange = (newType: AdType) => {
@@ -942,16 +944,11 @@ export function AdRow({
                                                 Needs at least {CAROUSEL_MIN_CARDS} cards to publish
                                             </span>
                                         )}
-                                        {currentTypeConfig?.recommendedUse && (
+                                        {/* Multi-media rows show this hint beside their stacks instead */}
+                                        {currentTypeConfig?.recommendedUse && !showStacks && (
                                             <span className="text-[10px] leading-tight text-foreground-subtle/80 italic">
                                                 {currentTypeConfig.recommendedUse}
                                             </span>
-                                        )}
-                                        {/* Multi-media: auto-stacked orientation variants, as they'll publish */}
-                                        {row.adType === 'multi_media' && row.assets.length > 0 && (
-                                            <div className="mt-1.5">
-                                                <MediaStacks assets={row.assets} size="sm" />
-                                            </div>
                                         )}
                                     </div>
                                 </div>
@@ -960,8 +957,9 @@ export function AdRow({
                     </div>
                 </div>
 
-                {/* Copy Slots */}
-                <div className="flex-1 grid grid-cols-2 gap-4">
+                {/* Copy Slots (+ multi-media stacks underneath, in the space the tall asset card leaves) */}
+                <div className="flex-1 min-w-0 flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-4">
                     {/* Primary Text Slots */}
                     <div className="space-y-2">
                         <div className="flex items-center gap-2 mb-2">
@@ -1015,6 +1013,27 @@ export function AdRow({
                             />
                         ))}
                     </div>
+                </div>
+
+                {/* Multi-media: auto-stacked orientation variants, as they'll publish */}
+                {showStacks && (
+                    <div className="rounded-lg border border-border/60 bg-background-tertiary/40 px-3 py-2.5">
+                        <div className="flex items-baseline justify-between gap-3 mb-2">
+                            <span className="text-xs font-medium text-foreground-subtle uppercase tracking-wide">
+                                Media Stacks · {stackCount} {stackCount === 1 ? 'stack' : 'stacks'}
+                            </span>
+                            <span className="text-[10px] text-foreground-subtle/80 italic truncate">
+                                {currentTypeConfig?.recommendedUse} Click a stack to preview it.
+                            </span>
+                        </div>
+                        <MediaStacks
+                            assets={row.assets}
+                            size="lg"
+                            selectedIndex={displayedAssetIndex}
+                            onSelect={(i) => { setDisplayedAssetIndex(i); setIsPlayingVideo(false); }}
+                        />
+                    </div>
+                )}
                 </div>
 
                 {/* URL Input + Actions */}

@@ -565,7 +565,10 @@ export function ReviewPublishStep({
                                     ? ad.slots.primaryTexts.slice(0, 1)
                                     : ad.slots.primaryTexts
                                 ).filter(Boolean).length;
-                                const hlCount = ad.slots.headlines.filter(Boolean).length;
+                                const hlFilled = ad.slots.headlines.filter(Boolean).length;
+                                // Only carousels publish more than 5 headlines (one per card)
+                                const hlCount = ad.adType === 'carousel' ? hlFilled : Math.min(hlFilled, 5);
+                                const hlUnused = hlFilled - hlCount;
 
                                 return (
                                     <React.Fragment key={ad.id}>
@@ -606,10 +609,22 @@ export function ReviewPublishStep({
                                             </td>
                                             <td className="px-4 py-3">{getEffectiveCta(ad)}</td>
                                             <td className="px-4 py-3">{ad.assets.length}</td>
-                                            <td className="px-4 py-3">{ptCount} PT, {hlCount} HL</td>
+                                            <td className="px-4 py-3">{ptCount} PT, {hlCount} HL{hlUnused > 0 && <span className="text-amber-500"> (+{hlUnused} unused)</span>}</td>
                                             {publishResults && (
                                                 <td className="px-4 py-3">
-                                                    {result?.success ? (
+                                                    {result?.success && result.warning ? (
+                                                        <button
+                                                            onClick={() => setExpandedErrorId(expandedErrorId === ad.id ? null : ad.id)}
+                                                            className="flex items-center gap-1.5 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                                                            title={result.warning}
+                                                        >
+                                                            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                                                            <span className="text-xs">Published — check</span>
+                                                            {expandedErrorId === ad.id
+                                                                ? <ChevronDown className="w-3 h-3 flex-shrink-0" />
+                                                                : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
+                                                        </button>
+                                                    ) : result?.success ? (
                                                         <div className="flex items-center gap-2">
                                                             <CheckCircle className="w-4 h-4 text-green-500" />
                                                             <span className="text-green-400 text-xs">Published</span>
@@ -620,7 +635,7 @@ export function ReviewPublishStep({
                                                             className="flex items-center gap-1.5 text-red-400 hover:text-red-300 transition-colors cursor-pointer"
                                                         >
                                                             <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
-                                                            <span className="text-xs truncate max-w-28">{result.error}</span>
+                                                            <span className="text-xs truncate max-w-28" title={result.error}>{result.error}</span>
                                                             {result.errorDetail && (
                                                                 expandedErrorId === ad.id
                                                                     ? <ChevronDown className="w-3 h-3 flex-shrink-0" />
@@ -631,6 +646,17 @@ export function ReviewPublishStep({
                                                 </td>
                                             )}
                                         </tr>
+                                        {/* Expandable warning row (published, but needs a look) */}
+                                        {result?.success && result.warning && expandedErrorId === ad.id && (
+                                            <tr className="bg-amber-500/5">
+                                                <td colSpan={publishResults ? 7 : 6} className="px-4 py-3">
+                                                    <div className="flex gap-3 items-start">
+                                                        <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                                                        <p className="text-sm text-foreground-muted">{result.warning}</p>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )}
                                         {/* Expandable error detail row */}
                                         {result && !result.success && expandedErrorId === ad.id && result.errorDetail && (
                                             <tr className="bg-red-500/5">

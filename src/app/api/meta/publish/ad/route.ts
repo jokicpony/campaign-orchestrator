@@ -6,6 +6,12 @@ import crypto from 'crypto';
 
 import { GRAPH_API_BASE } from '@/lib/meta/constants';
 import { CAROUSEL_MIN_CARDS, CAROUSEL_MAX_CARDS } from '@/types/ad-types';
+import {
+    buildMediaSourcingSpec,
+    mediaKey,
+    mediaLabel,
+    normalizeMediaItems,
+} from '@/lib/meta/multiMedia';
 
 // Advantage+ creative enhancement toggles supported by degrees_of_freedom_spec
 const ENHANCEMENT_KEYS = [
@@ -153,8 +159,9 @@ export async function POST(request: NextRequest) {
             videoIds = [],
             urlParameters = '',
             status = 'PAUSED',
-            adType = 'flexible', // 'flexible' | 'single_image' | 'single_video' | 'carousel'
+            adType = 'flexible', // 'flexible' | 'single_image' | 'single_video' | 'carousel' | 'multi_media'
             cards = [], // Ordered carousel cards: [{ type, hash?, videoId? }] — pairs with headlines by index
+            media = [], // Ordered multi-media items: [{ type, name?, hash?, videoId?, width?, height?, stack? }] — [0] is primary
             pixelId = '', // Pixel ID for conversion tracking
             enhancements = {}, // Creative enhancement toggles
             instagramActorId = '', // Instagram Business Account ID
@@ -186,6 +193,13 @@ export async function POST(request: NextRequest) {
             if (!Array.isArray(cards) || cards.length < CAROUSEL_MIN_CARDS) {
                 return NextResponse.json(
                     { error: `Carousel ads require at least ${CAROUSEL_MIN_CARDS} cards, in order` },
+                    { status: 400 }
+                );
+            }
+        } else if (adType === 'multi_media') {
+            if (!Array.isArray(media) || media.length === 0) {
+                return NextResponse.json(
+                    { error: 'Multi-media ads require at least one media item, in order' },
                     { status: 400 }
                 );
             }
@@ -227,12 +241,12 @@ export async function POST(request: NextRequest) {
         // flexible ads routinely carry several. Polls run in parallel, so the
         // wait is one polling window regardless of video count. The lead
         // video's thumbnail is captured for video_data creatives.
-        // (Carousel handles its own per-card video readiness below.)
+        // (Carousel and multi-media handle their own per-item video readiness below.)
         let videoThumbnailUrl: string | null = null;
         const firstVideoId = videoIds[0];
         const firstImageHash = imageHashes[0];
 
-        if (adType !== 'carousel' && videoIds.length > 0) {
+        if (adType !== 'carousel' && adType !== 'multi_media' && videoIds.length > 0) {
             try {
                 logger.info('publish', 'Polling video processing status', { sid, videoCount: videoIds.length });
                 const results = await Promise.all(
@@ -265,13 +279,223 @@ export async function POST(request: NextRequest) {
         }
 
         // === ROUTE BY AD TYPE ===
+        // multi_media → inline creative with media_sourcing_spec (direct ad creation)
         // carousel → object_story_spec.link_data.child_attachments (two-step)
         // single_image / single_video → asset_feed_spec + AdCreative (two-step)
         // flexible → creative_asset_groups_spec (direct ad creation, unchanged)
 
         const isSingleAd = adType === 'single_image' || adType === 'single_video';
 
-        if (adType === 'carousel') {
+        if (adType === 'multi_media') {
+            // === MULTI-MEDIA: creative.media_sourcing_spec (docs/MULTI_MEDIA_ADS.md) ===
+            // One ad, up to 10 images + videos. Item 0 is the primary media in
+            // object_story_spec and is ALSO listed in the spec (Meta requires
+            // both). Images sharing a `stack` become one group of orientation
+            // variants (Meta serves the variant that fits each placement).
+            const { items, droppedDuplicates, droppedInvalid } = normalizeMediaItems(media);
+            if (items.length === 0) {
+                return NextResponse.json(
+                    { error: 'Multi-media ad has no usable media (every item was missing its image hash or video id).', sid },
+                    { status: 422 }
+                );
+            }
+            if (droppedInvalid > 0) {
+                logger.warn('publish', 'Dropped malformed multi-media items', { sid, droppedInvalid });
+            }
+
+            // Every video must finish processing, and each spec entry needs
+            // a thumbnail_url. Parallel polls → one polling window total.
+            const videoChecks = await Promise.all(
+                items.map(item =>
+                    item.type === 'video' && item.videoId
+                        ? waitForVideoReady(accessToken, item.videoId, sid)
+                        : Promise.resolve(null)
+                )
+            );
+            const failedIndex = videoChecks.findIndex(r => r && r.status !== 'ready');
+            if (failedIndex >= 0) {
+                const failed = videoChecks[failedIndex]!;
+                const label = mediaLabel(items[failedIndex], failedIndex);
+                return NextResponse.json(
+                    {
+                        error: failed.status === 'error'
+                            ? `Video ${label} failed processing on Meta. Please re-upload it.`
+                            : `Video ${label} is still processing after ${MAX_VIDEO_POLL_ATTEMPTS * VIDEO_POLL_INTERVAL_MS / 1000}s. Please try again in a minute.`,
+                        sid,
+                    },
+                    { status: 422 }
+                );
+            }
+            const missingThumbIndex = videoChecks.findIndex(r => r && !r.thumbnailUrl);
+            if (missingThumbIndex >= 0) {
+                return NextResponse.json(
+                    { error: `Video ${mediaLabel(items[missingThumbIndex], missingThumbIndex)} has no thumbnail on Meta yet — multi-media ads need one per video. Try again in a minute.`, sid },
+                    { status: 422 }
+                );
+            }
+            const withThumbs = items.map((item, i) => ({
+                ...item,
+                thumbnailUrl: videoChecks[i]?.thumbnailUrl ?? null,
+            }));
+
+            const built = buildMediaSourcingSpec({
+                items: withThumbs,
+                primaryTexts: primaryTexts as string[],
+                headlines: headlines as string[],
+            });
+            const primary = built.items[0];
+
+            const callToActionSpec = {
+                type: callToAction,
+                value: { link: destinationUrl },
+            };
+            const objectStorySpec: Record<string, unknown> = {
+                page_id: pageId,
+                ...(instagramActorId && { instagram_user_id: instagramActorId }),
+            };
+            if (primary.type === 'video') {
+                objectStorySpec.video_data = {
+                    video_id: primary.videoId,
+                    image_url: primary.thumbnailUrl,
+                    call_to_action: callToActionSpec,
+                };
+            } else {
+                objectStorySpec.link_data = {
+                    link: destinationUrl,
+                    image_hash: primary.hash,
+                    call_to_action: callToActionSpec,
+                };
+            }
+
+            const creativeObject: Record<string, unknown> = {
+                name: `${adName} - Creative`,
+                object_story_spec: objectStorySpec,
+                media_sourcing_spec: built.spec,
+                ...(instagramActorId && { instagram_user_id: instagramActorId }),
+            };
+
+            const creativeFeatures = buildCreativeFeatures(
+                enhancements,
+                built.items.some(item => item.type === 'video')
+            );
+            if (Object.keys(creativeFeatures).length > 0) {
+                creativeObject.degrees_of_freedom_spec = {
+                    creative_features_spec: creativeFeatures,
+                };
+            }
+            if (urlParameters) {
+                creativeObject.url_tags = urlParameters;
+            }
+
+            const adPayload: Record<string, string> = {
+                name: adName,
+                adset_id: adSetId,
+                status: status,
+                creative: JSON.stringify(creativeObject),
+                ...(pixelId ? { tracking_specs: JSON.stringify([{ 'action.type': ['offsite_conversion'], fb_pixel: [pixelId] }]) } : {}),
+            };
+
+            logger.info('publish', 'Creating ad via media_sourcing_spec (multi-media)', {
+                sid,
+                mediaCount: built.items.length,
+                imageCount: built.items.filter(i => i.type === 'image').length,
+                videoCount: built.items.filter(i => i.type === 'video').length,
+                droppedDuplicates,
+                groupCount: built.groupCount,
+                primaryType: primary.type,
+                instagramActorId: instagramActorId || '(none)',
+            });
+
+            const adResponse = await fetch(
+                `${GRAPH_API_BASE}/${adAccountId}/ads`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        Authorization: `Bearer ${accessToken}`,
+                    },
+                    body: new URLSearchParams(adPayload),
+                }
+            );
+            const adData = await adResponse.json();
+
+            if (!adResponse.ok || adData.error) {
+                logger.error('publish', 'Ad creation error (multi-media path)', { sid, metaError: serializeMetaError(adData), payload: adPayload });
+                return NextResponse.json(
+                    {
+                        error: adData.error?.message || 'Failed to create multi-media ad',
+                        errorType: adData.error?.type,
+                        errorCode: adData.error?.code,
+                        details: adData.error,
+                        fullResponse: adData,
+                    },
+                    { status: adResponse.status || 500 }
+                );
+            }
+
+            // Read back what Meta actually stored and compare item-by-item.
+            // Earlier mixed-media write shapes were accepted and then silently
+            // dropped assets. Only `source: multi_media` entries are ours —
+            // Meta adds its own related_media / gen_ai items. Never fails the
+            // publish (the ad exists either way); problems become a warning.
+            let mediaPersisted: number | null = null;
+            const warnings: string[] = [];
+            if (droppedDuplicates > 0) {
+                warnings.push(`${droppedDuplicates} file(s) were identical to another in this ad and were sent once.`);
+            }
+            try {
+                const readRes = await fetch(
+                    `${GRAPH_API_BASE}/${adData.id}?fields=${encodeURIComponent('creative{id,media_sourcing_spec}')}`,
+                    { headers: { Authorization: `Bearer ${accessToken}` } }
+                );
+                const readData = await readRes.json();
+                const stored = readData.creative?.media_sourcing_spec;
+                if (stored) {
+                    type StoredMedia = { source?: string; hash?: string; video_id?: string; original_video_id?: string; group_id?: string };
+                    const ours = [
+                        ...((stored.images ?? []) as StoredMedia[]).filter(m => m.source === 'multi_media')
+                            .map(m => ({ key: mediaKey({ type: 'image', hash: m.hash }), group: m.group_id })),
+                        ...((stored.videos ?? []) as StoredMedia[]).filter(m => m.source === 'multi_media')
+                            .map(m => ({ key: mediaKey({ type: 'video', videoId: m.original_video_id ?? m.video_id }), group: undefined })),
+                    ];
+                    const persistedKeys = new Set(ours.map(m => m.key));
+                    mediaPersisted = built.items.filter(item => persistedKeys.has(mediaKey(item))).length;
+                    const missing = built.items
+                        .map((item, i) => ({ item, i }))
+                        .filter(({ item }) => !persistedKeys.has(mediaKey(item)))
+                        .map(({ item, i }) => mediaLabel(item, i));
+                    if (missing.length > 0) {
+                        warnings.push(`Meta didn't keep ${missing.join(', ')} — check this ad in Ads Manager.`);
+                    }
+                    const groupsPersisted = new Set(ours.map(m => m.group).filter(Boolean)).size;
+                    if (groupsPersisted < built.groupCount) {
+                        warnings.push(`Meta kept ${groupsPersisted} of ${built.groupCount} image stacks — shapes may not be matched to placements.`);
+                    }
+                    logger[warnings.length > 0 ? 'warn' : 'info']('publish', 'Multi-media read-back', {
+                        sid, adId: adData.id, creativeId: readData.creative?.id,
+                        mediaSent: built.items.length, mediaPersisted, missing,
+                        groupsSent: built.groupCount, groupsPersisted,
+                        metaAddedItems: ((stored.images?.length ?? 0) + (stored.videos?.length ?? 0)) - ours.length,
+                    });
+                } else {
+                    logger.warn('publish', 'Multi-media read-back returned no media_sourcing_spec', { sid, adId: adData.id, readData });
+                }
+            } catch (e) {
+                logger.warn('publish', 'Multi-media read-back failed (ad was created)', { sid, adId: adData.id, error: serializeError(e) });
+            }
+
+            logger.info('publish', 'Ad created (multi-media path)', { sid, adId: adData.id, adName });
+
+            return NextResponse.json({
+                success: true,
+                adId: adData.id,
+                adName,
+                mediaSent: built.items.length,
+                mediaPersisted,
+                ...(warnings.length > 0 && { warning: warnings.join(' ') }),
+            });
+
+        } else if (adType === 'carousel') {
             // === CAROUSEL: child_attachments, paired by position ===
             // Card i = asset i + headline i. The wizard sends headlines
             // positionally ('' for a deliberately blank slot — that card's name

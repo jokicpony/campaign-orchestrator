@@ -4,6 +4,8 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, Image as ImageIcon, Film, Link, ExternalLink } from 'lucide-react';
 import { AdRow, CTA_OPTIONS, CallToAction, DEFAULT_AD_TYPES } from '@/types';
 import { WizardSettings } from './index';
+import { buildStacks } from '@/lib/meta/multiMedia';
+import { MediaStacks } from '@/components/MediaStacks';
 
 interface CreativeConfirmStepProps {
     settings: WizardSettings;
@@ -49,10 +51,12 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
     };
 
     const getAssetCount = (ad: AdRow): number => ad.assets.length;
-    const getCopyCount = (ad: AdRow): { pt: number; hl: number } => ({
+    const getCopyCount = (ad: AdRow): { pt: number; hl: number; hlUnused: number } => ({
         // Carousels publish only Primary Text 1
         pt: (ad.adType === 'carousel' ? ad.slots.primaryTexts.slice(0, 1) : ad.slots.primaryTexts).filter(Boolean).length,
-        hl: ad.slots.headlines.filter(Boolean).length,
+        // Only carousels publish more than 5 headlines (one per card)
+        hl: ad.adType === 'carousel' ? ad.slots.headlines.filter(Boolean).length : Math.min(ad.slots.headlines.filter(Boolean).length, 5),
+        hlUnused: ad.adType === 'carousel' ? 0 : Math.max(ad.slots.headlines.filter(Boolean).length - 5, 0),
     });
 
     const getAdTypeLabel = (ad: AdRow): string =>
@@ -78,6 +82,8 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
                     const assetCount = getAssetCount(ad);
                     const copyCount = getCopyCount(ad);
                     const displayedAsset = ad.assets[0];
+                    const isMultiMedia = ad.adType === 'multi_media';
+                    const stackCount = isMultiMedia ? buildStacks(ad.assets).length : 0;
 
                     return (
                         <div
@@ -114,9 +120,15 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
                                         <span className="px-1.5 py-0.5 rounded bg-background">
                                             {getAdTypeLabel(ad)}
                                         </span>
-                                        <span>{assetCount} asset{assetCount !== 1 ? 's' : ''}</span>
+                                        <span>
+                                            {assetCount} asset{assetCount !== 1 ? 's' : ''}
+                                            {isMultiMedia && ` in ${stackCount} stack${stackCount !== 1 ? 's' : ''}`}
+                                        </span>
                                         <span>•</span>
-                                        <span>{copyCount.pt} PT, {copyCount.hl} HL</span>
+                                        <span>
+                                            {copyCount.pt} PT, {copyCount.hl} HL
+                                            {copyCount.hlUnused > 0 && <span className="text-amber-500"> (+{copyCount.hlUnused} unused — only 5 publish)</span>}
+                                        </span>
                                     </div>
                                 </div>
 
@@ -158,6 +170,21 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
                                 </button>
                             </div>
 
+                            {/* Multi-media stacks — always visible so they can be confirmed at a glance */}
+                            {isMultiMedia && ad.assets.length > 0 && (
+                                <div className="px-4 pb-4 -mt-1 space-y-2">
+                                    <MediaStacks assets={ad.assets} size="md" />
+                                    <p className="text-xs text-foreground-muted">
+                                        Shapes of the same creative are stacked by file name — Meta shows the one that fits each placement.
+                                    </p>
+                                    {ad.assets.some(a => a.type === 'image' && !a.dimensions) && (
+                                        <p className="text-xs text-amber-500">
+                                            Some images have no size info from Drive, so they can&apos;t be stacked.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Expanded Details */}
                             {isExpanded && (
                                 <div className="px-4 pb-4 pt-2 border-t border-border space-y-4">
@@ -193,8 +220,8 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
                                         </select>
                                     </div>
 
-                                    {/* Assets Preview */}
-                                    {ad.assets.length > 0 && (
+                                    {/* Assets Preview (multi-media shows stacks above instead) */}
+                                    {ad.assets.length > 0 && !isMultiMedia && (
                                         <div>
                                             <label className="block text-xs font-medium text-foreground-muted mb-2">
                                                 Assets ({ad.assets.length})

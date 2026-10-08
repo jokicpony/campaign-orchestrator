@@ -6,6 +6,7 @@ import { FolderOpen, Loader2, RefreshCw, AlertCircle, Check, Link2, HardDrive, S
 import { useAuth } from '@/components/AuthContext';
 import { loadFolderAssets, DriveAuthError, DriveFolderError } from '@/lib/google';
 import { Asset } from '@/types';
+import { shapeLabel } from '@/lib/meta/multiMedia';
 
 interface AssetLibraryProps {
     driveFolderUrl: string | null;
@@ -365,11 +366,7 @@ function VideoHoverCard({ asset, driveAccessToken }: { asset: Asset; driveAccess
                 </div>
                 {asset.dimensions && (
                     <div className="px-2 py-0.5 rounded text-[10px] font-bold bg-black/60 text-white">
-                        {asset.dimensions.width < asset.dimensions.height
-                            ? '9:16'
-                            : asset.dimensions.width > asset.dimensions.height
-                                ? '16:9'
-                                : '1:1'}
+                        {shapeLabel(asset.dimensions)}
                     </div>
                 )}
             </div>

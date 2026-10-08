@@ -9,8 +9,10 @@ import { CAROUSEL_MIN_CARDS } from '@/types/ad-types';
 import { AD_TYPE_COLORS } from '@/types';
 import { DropSlot } from './DropSlot';
 import { AssetPickerPopover } from '@/components/AssetPickerPopover';
+import { MediaStacks } from '@/components/MediaStacks';
 import { useAuth } from '@/components/AuthContext';
 import { CarouselPairingHint } from '@/components/CarouselPairingHint';
+import { shapeLabel } from '@/lib/meta/multiMedia';
 
 // Portal-based tooltip that escapes overflow:hidden containers
 function PortalTooltip({ text, children }: { text: string; children: React.ReactNode }) {
@@ -789,11 +791,7 @@ export function AdRow({
                                             </span>
                                             {displayedAsset.dimensions && (
                                                 <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-black/60 text-white">
-                                                    {displayedAsset.dimensions.width < displayedAsset.dimensions.height
-                                                        ? '9:16'
-                                                        : displayedAsset.dimensions.width > displayedAsset.dimensions.height
-                                                            ? '16:9'
-                                                            : '1:1'}
+                                                    {shapeLabel(displayedAsset.dimensions)}
                                                 </span>
                                             )}
                                         </div>
@@ -948,6 +946,12 @@ export function AdRow({
                                             <span className="text-[10px] leading-tight text-foreground-subtle/80 italic">
                                                 {currentTypeConfig.recommendedUse}
                                             </span>
+                                        )}
+                                        {/* Multi-media: auto-stacked orientation variants, as they'll publish */}
+                                        {row.adType === 'multi_media' && row.assets.length > 0 && (
+                                            <div className="mt-1.5">
+                                                <MediaStacks assets={row.assets} size="sm" />
+                                            </div>
                                         )}
                                     </div>
                                 </div>

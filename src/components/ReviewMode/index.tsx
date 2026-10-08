@@ -6,6 +6,8 @@ import { CheckCircle2, MessageSquare, AlertCircle, ChevronLeft, ChevronRight, Fi
 import { Campaign, AdRow, AdComment, DEFAULT_AD_TYPES, mergeAdTypes, AD_TYPE_COLORS } from '@/types';
 import { useAuth } from '@/components/AuthContext';
 import { CarouselPairingHint } from '@/components/CarouselPairingHint';
+import { MediaStacks } from '@/components/MediaStacks';
+import { shapeLabel } from '@/lib/meta/multiMedia';
 import { PublishWizard, WizardSettings, AdPublishResult } from '@/components/PublishWizard';
 
 interface ReviewModeProps {
@@ -682,13 +684,9 @@ function ReviewCard({ row, index, onUpdateRow, userName, globalSettings, driveAc
                             {Math.floor(selectedAsset.duration / 60)}:{String(Math.floor(selectedAsset.duration % 60)).padStart(2, '0')}
                         </span>
                     )}
-                    {selectedAsset?.dimensions && (
+                    {shapeLabel(selectedAsset?.dimensions) && (
                         <span className="px-2 py-0.5 rounded bg-foreground-subtle/20 text-foreground-muted text-xs">
-                            {selectedAsset.dimensions.width < selectedAsset.dimensions.height
-                                ? 'Vertical'
-                                : selectedAsset.dimensions.width > selectedAsset.dimensions.height
-                                    ? 'Landscape'
-                                    : 'Square'}
+                            {shapeLabel(selectedAsset?.dimensions)}
                         </span>
                     )}
                 </div>
@@ -768,6 +766,13 @@ function ReviewCard({ row, index, onUpdateRow, userName, globalSettings, driveAc
                     </div>
                 )}
             </div>
+
+            {/* Multi-media: stacks decide which shape serves where, so reviewers see them before approving */}
+            {row.adType === 'multi_media' && row.assets.length > 0 && (
+                <div className="px-4 py-3 bg-background-tertiary border-t border-border">
+                    <MediaStacks assets={row.assets} size="md" />
+                </div>
+            )}
 
             {/* === Zone 3: Bottom Info Bar === */}
             <div className="flex items-center justify-between px-4 py-2.5 bg-background-tertiary border-t border-border">

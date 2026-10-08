@@ -1,7 +1,7 @@
 /**
  * Standardized Ad Type Identifiers
  */
-export type AdTypeId = 'flexible' | 'single_image' | 'single_video' | 'carousel';
+export type AdTypeId = 'flexible' | 'single_image' | 'single_video' | 'carousel' | 'multi_media';
 
 /**
  * Carousel card minimum (Meta requires at least 2 child attachments)
@@ -58,5 +58,14 @@ export const STANDARDIZED_AD_TYPES = [
         description: '2–10 cards, each pairing an asset with a headline by position',
         maxAssets: CAROUSEL_MAX_CARDS,
         recommendedUse: 'Card N = Asset N + Headline N'
+    },
+    {
+        id: 'multi_media' as AdTypeId,
+        displayName: 'Multi-Media',
+        namingAlias: 'Multi',
+        color: 'cyan',
+        description: 'Up to 10 images + videos in one ad; shapes of one creative stack together',
+        maxAssets: 10,
+        recommendedUse: 'Same-name shapes stack: Toast_1x1 + Toast_9x16. First asset leads.'
     }
 ] as const;

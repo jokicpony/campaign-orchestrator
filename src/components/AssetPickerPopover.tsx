@@ -4,6 +4,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Image as ImageIcon, Video, ImageOff, Loader2 } from 'lucide-react';
 import { Asset } from '@/types';
+import { shapeLabel } from '@/lib/meta/multiMedia';
 
 
 interface AssetPickerPopoverProps {
@@ -194,13 +195,9 @@ export function AssetPickerPopover({
                                                 ) : (
                                                     <ImageIcon className="w-3.5 h-3.5 text-white drop-shadow" />
                                                 )}
-                                                {asset.dimensions && (
+                                                {shapeLabel(asset.dimensions) && (
                                                     <span className="text-[9px] font-bold text-white drop-shadow bg-black/40 px-1 rounded">
-                                                        {asset.dimensions.width < asset.dimensions.height
-                                                            ? '9:16'
-                                                            : asset.dimensions.width > asset.dimensions.height
-                                                                ? '16:9'
-                                                                : '1:1'}
+                                                        {shapeLabel(asset.dimensions)}
                                                     </span>
                                                 )}
                                             </div>

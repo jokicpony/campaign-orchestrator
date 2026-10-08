@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, ChevronRight, ChevronLeft, Loader2, CheckCircle, AlertCircle, StopCircle } from 'lucide-react';
 import { AdRow, CallToAction } from '@/types';
 import { CAROUSEL_MIN_CARDS } from '@/types/ad-types';
+import { buildStacks, VARIANT_FILE_TAGS } from '@/lib/meta/multiMedia';
 import { CampaignTargetStep } from './CampaignTargetStep';
 import { CampaignConfigStep } from './CampaignConfigStep';
 import { CreativeConfirmStep } from './CreativeConfirmStep';
@@ -151,6 +152,7 @@ export interface AdPublishResult {
     metaAdId?: string;
     error?: string;
     errorDetail?: string; // Human-readable explanation of what went wrong
+    warning?: string; // Published, but something needs a look (e.g. Meta didn't keep every multi-media item)
 }
 
 // Progress tracking for publish flow
@@ -632,8 +634,8 @@ export function PublishWizard({
 
             // Rows often share Drive files (same creatives, different copy).
             // Concurrent workers renaming the same file would interleave and
-            // leave files named after different ads, so each file is renamed
-            // only by the first row (in start order) that uses it.
+            // leave a stack's files named after different ads, so each file is
+            // renamed only by the first row (in start order) that uses it.
             const renameClaims = new Set<string>();
 
             // Process each ad — pipelines run concurrently via a bounded pool.
@@ -674,23 +676,44 @@ export function PublishWizard({
                     // Upload assets using server-side Drive-to-Meta transfer to avoid CORS
                     const imageHashes: string[] = [];
                     const videoIds: string[] = [];
-                    // Carousel cards must keep the row's asset order — collect
-                    // uploads in sequence (imageHashes/videoIds split by type
-                    // and lose the interleaved ordering)
-                    const orderedCards: Array<{ type: 'image' | 'video'; hash?: string; videoId?: string }> = [];
+                    // Carousel cards and multi-media items must keep the row's
+                    // asset order — collect uploads in sequence (imageHashes/videoIds
+                    // split by type and lose the interleaved ordering). Dimensions and
+                    // stack index ride along so multi-media can group orientation variants.
+                    const orderedCards: Array<{ type: 'image' | 'video'; name?: string; hash?: string; videoId?: string; width?: number; height?: number; stack?: number }> = [];
                     const adName = ad.generatedAdName || ad.angleName || `Ad ${ad.id.slice(0, 6)}`;
 
                     // Upload assets — for single_image/single_video, only upload the first asset
                     // (remaining assets are morph references for the creative builder)
                     const isSingleAd = ad.adType === 'single_image' || ad.adType === 'single_video';
                     const isCarousel = ad.adType === 'carousel';
+                    const isMultiMedia = ad.adType === 'multi_media';
                     const assetsToUpload = isSingleAd ? ad.assets.slice(0, 1) : ad.assets;
+
+                    // Multi-media: stack orientation variants by file name — the same
+                    // buildStacks the confirm step shows, computed from the names
+                    // BEFORE the rename below overwrites them in Drive
+                    const stackOf = new Map<number, { index: number; tag?: string; size: number }>();
+                    if (isMultiMedia) {
+                        buildStacks(assetsToUpload).forEach((stack, index) =>
+                            stack.members.forEach((member, k) => {
+                                const variant = stack.variants[k];
+                                stackOf.set(member, { index, tag: variant && VARIANT_FILE_TAGS[variant], size: stack.members.length });
+                            })
+                        );
+                    }
 
                     for (const [assetIndex, asset] of assetsToUpload.entries()) {
                         try {
                             // Step 1: Rename file in Drive to match structured ad name
                             if (asset.driveFileId && driveAccessToken) {
-                                const suffix = ad.assets.length > 1 ? `_${assetIndex + 1}` : '';
+                                // Multi-media names files by stack + shape (AdName_2_1x1,
+                                // AdName_2_9x16) so stacks stay recoverable on reuse
+                                const stackInfo = stackOf.get(assetIndex);
+                                const suffix = ad.assets.length <= 1 ? ''
+                                    : stackInfo
+                                        ? `_${stackInfo.index + 1}${stackInfo.tag ? `_${stackInfo.tag}` : ''}`
+                                        : `_${assetIndex + 1}`;
 
                                 // Extension from the real Drive file name — asset.name has
                                 // it stripped (and may contain dots, e.g. "Toast_1.91x1")
@@ -734,10 +757,10 @@ export function PublishWizard({
                                 if (transferData.success) {
                                     if (transferData.type === 'image' && transferData.hash) {
                                         imageHashes.push(transferData.hash);
-                                        orderedCards.push({ type: 'image', hash: transferData.hash });
+                                        orderedCards.push({ type: 'image', name: asset.name, hash: transferData.hash, ...asset.dimensions, stack: stackOf.get(assetIndex)?.index });
                                     } else if (transferData.type === 'video' && transferData.videoId) {
                                         videoIds.push(transferData.videoId);
-                                        orderedCards.push({ type: 'video', videoId: transferData.videoId });
+                                        orderedCards.push({ type: 'video', name: asset.name, videoId: transferData.videoId, ...asset.dimensions, stack: stackOf.get(assetIndex)?.index });
                                     }
                                 } else {
                                     console.error('Drive-to-Meta transfer failed:', transferData.error);
@@ -844,6 +867,7 @@ export function PublishWizard({
                             status: settings.initialStatus,
                             adType: ad.adType || 'flexible', // Route based on ad type selector
                             ...(isCarousel && { cards: orderedCards }), // Ordered cards for carousel pairing
+                            ...(isMultiMedia && { media: orderedCards }), // Ordered media; [0] is primary
                             pixelId: settings.pixelId || '', // Pixel ID for conversion tracking
                             enhancements: settings.enhancements, // Creative enhancement toggles
                         }),
@@ -857,6 +881,7 @@ export function PublishWizard({
                             adName: ad.generatedAdName || ad.angleName || `Ad ${ad.id.slice(0, 6)}`,
                             success: true,
                             metaAdId: publishData.adId,
+                            ...(publishData.warning && { warning: publishData.warning }),
                         };
                     } else {
                         console.error('Publish failed for ad:', ad.id, publishData);

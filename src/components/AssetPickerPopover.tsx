@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Check, Image as ImageIcon, Video, ImageOff, Loader2 } from 'lucide-react';
+import { X, Image as ImageIcon, Video, ImageOff, Loader2 } from 'lucide-react';
 import { Asset } from '@/types';
 
 
@@ -88,11 +88,19 @@ export function AssetPickerPopover({
         });
     }, [maxSelection]);
 
+    // Order matters (carousel cards pair with headlines by position; the first
+    // multi-media asset is the ad's lead media). selectedIds is a Set, which
+    // keeps insertion order: the row's existing assets first, then new picks
+    // in click order. Row assets missing from the library cache are kept as-is.
     const handleConfirm = useCallback(() => {
-        const selectedAssets = cachedAssets.filter(a => selectedIds.has(a.id));
+        const byId = new Map(cachedAssets.map(a => [a.id, a]));
+        const current = new Map(currentAssets.map(a => [a.id, a]));
+        const selectedAssets = Array.from(selectedIds)
+            .map(id => byId.get(id) ?? current.get(id))
+            .filter((a): a is Asset => !!a);
         onSelectAssets(selectedAssets);
         onClose();
-    }, [cachedAssets, selectedIds, onSelectAssets, onClose]);
+    }, [cachedAssets, currentAssets, selectedIds, onSelectAssets, onClose]);
 
     const hasAssets = cachedAssets.length > 0;
 
@@ -199,9 +207,12 @@ export function AssetPickerPopover({
                                         </div>
 
                                         {/* Selection indicator - above dimming layer */}
+                                        {/* Number = position in the row (order matters for carousels and the multi-media lead) */}
                                         {isSelected && (
                                             <div className="absolute inset-0 bg-accent-primary/30 flex items-center justify-center">
-                                                <Check className="w-6 h-6 text-white drop-shadow" />
+                                                <span className="w-7 h-7 rounded-full bg-accent-primary flex items-center justify-center text-xs font-bold text-white shadow">
+                                                    {Array.from(selectedIds).indexOf(asset.id) + 1}
+                                                </span>
                                             </div>
                                         )}
 

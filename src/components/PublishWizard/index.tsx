@@ -425,8 +425,12 @@ export function PublishWizard({
         if (code === 190 || msg.includes('token') && msg.includes('expir')) {
             return 'Your Meta access token has expired. Close this dialog, reconnect Meta, and try again.';
         }
-        // Video not ready
-        if (msg.includes('video') && (msg.includes('not ready') || msg.includes('processing'))) {
+        // Video failed on Meta — retrying won't help (check before "processing")
+        if (msg.includes('failed processing')) {
+            return 'Meta could not process this video. Re-upload the file (or export it again) and publish this ad again.';
+        }
+        // Video not ready / no thumbnail yet
+        if (msg.includes('video') && (msg.includes('not ready') || msg.includes('processing') || msg.includes('thumbnail'))) {
             return 'The video is still being processed by Meta. Wait a minute and try publishing this ad again.';
         }
         // Dynamic Creative limit
@@ -626,9 +630,24 @@ export function PublishWizard({
             // Get URL parameters from global settings (from hook)
             const urlParameters = globalSettings.urlParameters || '';
 
+            // Rows often share Drive files (same creatives, different copy).
+            // Concurrent workers renaming the same file would interleave and
+            // leave files named after different ads, so each file is renamed
+            // only by the first row (in start order) that uses it.
+            const renameClaims = new Set<string>();
+
             // Process each ad — pipelines run concurrently via a bounded pool.
             // Each returns its own result; the pool writes them back in ad order.
             const publishOneAd = async (ad: AdRow): Promise<AdPublishResult> => {
+                // Claim synchronously, before any await, so claims follow start order
+                const myRenames = new Set<string>();
+                for (const asset of ad.assets) {
+                    if (asset.driveFileId && !renameClaims.has(asset.driveFileId)) {
+                        renameClaims.add(asset.driveFileId);
+                        myRenames.add(asset.driveFileId);
+                    }
+                }
+
                 // Mark in-flight. Counters use functional setState so concurrent
                 // workers compose without clobbering each other.
                 setPublishProgress(prev => prev ? {
@@ -673,30 +692,28 @@ export function PublishWizard({
                             if (asset.driveFileId && driveAccessToken) {
                                 const suffix = ad.assets.length > 1 ? `_${assetIndex + 1}` : '';
 
-                                // Extract extension properly - only if there's actually a dot in the filename
-                                let ext = asset.type === 'video' ? 'mp4' : 'jpg'; // default based on type
-                                if (asset.name && asset.name.includes('.')) {
-                                    const parts = asset.name.split('.');
-                                    if (parts.length > 1) {
-                                        ext = parts.pop()!.toLowerCase();
-                                    }
-                                }
+                                // Extension from the real Drive file name — asset.name has
+                                // it stripped (and may contain dots, e.g. "Toast_1.91x1")
+                                const extMatch = asset.originalName?.match(/\.([a-z0-9]{2,5})$/i);
+                                const ext = extMatch ? extMatch[1].toLowerCase() : asset.type === 'video' ? 'mp4' : 'jpg';
 
                                 const newFileName = `${adName}${suffix}.${ext}`;
 
-                                console.log(`Renaming Drive file to: ${newFileName}`);
-                                try {
-                                    await authedFetch('/api/drive/rename', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                            googleAccessToken: driveAccessToken,
-                                            fileId: asset.driveFileId,
-                                            newName: newFileName,
-                                        }),
-                                    });
-                                } catch (renameError) {
-                                    console.warn('File rename failed (continuing anyway):', renameError);
+                                if (myRenames.has(asset.driveFileId)) {
+                                    console.log(`Renaming Drive file to: ${newFileName}`);
+                                    try {
+                                        await authedFetch('/api/drive/rename', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                googleAccessToken: driveAccessToken,
+                                                fileId: asset.driveFileId,
+                                                newName: newFileName,
+                                            }),
+                                        });
+                                    } catch (renameError) {
+                                        console.warn('File rename failed (continuing anyway):', renameError);
+                                    }
                                 }
 
                                 // Step 2: Upload to Meta via server-side proxy

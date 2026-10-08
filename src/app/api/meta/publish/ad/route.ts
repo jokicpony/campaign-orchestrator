@@ -75,23 +75,24 @@ async function waitForVideoReady(
         logger.debug('publish', `Video status poll ${attempt}/${MAX_VIDEO_POLL_ATTEMPTS}`, { sid, videoId, videoStatus });
 
         if (videoStatus === 'ready') {
-            let thumbnailUrl: string | null = statusData.picture || null;
-            if (!thumbnailUrl) {
-                try {
-                    const thumbRes = await fetch(
-                        `${GRAPH_API_BASE}/${videoId}/thumbnails?fields=id,is_preferred,uri`,
-                        { headers: { Authorization: `Bearer ${accessToken}` } }
-                    );
-                    const thumbData = await thumbRes.json();
-                    if (thumbData.data && thumbData.data.length > 0) {
-                        const thumbs = thumbData.data as Array<{ is_preferred?: boolean; uri: string }>;
-                        thumbnailUrl = (thumbs.find((t) => t.is_preferred) || thumbs[0]).uri;
-                    }
-                } catch (e) {
-                    logger.warn('publish', 'Thumbnail lookup failed (continuing)', { sid, videoId, error: serializeError(e) });
+            // Prefer the full-size preferred thumbnail: the video's `picture`
+            // field is a 160×160 preview (seen in the Oct 2026 probe) and would
+            // become the ad's lead-image when a video is the primary media
+            let thumbnailUrl: string | null = null;
+            try {
+                const thumbRes = await fetch(
+                    `${GRAPH_API_BASE}/${videoId}/thumbnails?fields=id,is_preferred,uri`,
+                    { headers: { Authorization: `Bearer ${accessToken}` } }
+                );
+                const thumbData = await thumbRes.json();
+                if (thumbData.data && thumbData.data.length > 0) {
+                    const thumbs = thumbData.data as Array<{ is_preferred?: boolean; uri: string }>;
+                    thumbnailUrl = (thumbs.find((t) => t.is_preferred) || thumbs[0]).uri;
                 }
+            } catch (e) {
+                logger.warn('publish', 'Thumbnail lookup failed (falling back to picture)', { sid, videoId, error: serializeError(e) });
             }
-            return { status: 'ready', thumbnailUrl };
+            return { status: 'ready', thumbnailUrl: thumbnailUrl || statusData.picture || null };
         }
 
         if (videoStatus === 'error') {

@@ -51,13 +51,14 @@ gcloud functions deploy "${FUNCTION_NAME}" \
     --trigger-http \
     --memory=2Gi \
     --timeout=540s \
-    --set-build-env-vars=GOOGLE_NODE_RUN_SCRIPTS=""
+    --set-build-env-vars=GOOGLE_NODE_RUN_SCRIPTS="" \
+    --format="value(serviceConfig.uri)"  # print only the URL: the full resource includes env var values
 
 echo ""
 echo "═══════════════════════════════════════════════"
 echo "  ✓ Deployment complete!"
 echo ""
-echo "  Function URL will be printed above."
+echo "  Function URL is printed above."
 echo "  Add it to .env.local as:"
 echo "    VIDEO_TRANSCODE_FUNCTION_URL=<url>"
 echo ""

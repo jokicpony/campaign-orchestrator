@@ -2,6 +2,9 @@
   "name": "campaign-orchestrator",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,22 +13,21 @@
     "test": "node --experimental-strip-types --no-warnings scripts/test-multi-media.mts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.58",
-    "@ai-sdk/google": "^3.0.43",
-    "@ai-sdk/openai": "^3.0.41",
-    "@google-cloud/firestore": "^8.6.0",
-    "@google/generative-ai": "^0.24.1",
-    "@vercel/oidc": "^3.8.0",
-    "ai": "^6.0.116",
-    "firebase": "^12.8.0",
+    "@ai-sdk/anthropic": "^3.0.135",
+    "@ai-sdk/google": "^3.0.138",
+    "@ai-sdk/openai": "^3.0.131",
+    "@google-cloud/firestore": "^8.7.1",
+    "@vercel/oidc": "^3.8.10",
+    "ai": "^6.0.315",
+    "firebase": "^12.19.0",
     "framer-motion": "^12.29.2",
-    "google-auth-library": "^10.9.0",
-    "jose": "^6.2.3",
+    "google-auth-library": "^10.9.1",
+    "jose": "^6.2.13",
     "lucide-react": "^0.563.0",
-    "next": "^16.2.9",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "sharp": "^0.34.5"
+    "next": "^16.4.3",
+    "react": "19.2.9",
+    "react-dom": "19.2.9",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -34,8 +36,13 @@
     "@types/react-dom": "^19",
     "@types/sharp": "^0.31.1",
     "eslint": "^9",
-    "eslint-config-next": "^16.2.9",
+    "eslint-config-next": "^16.4.3",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "@vercel/cli-config": {
+      "zod": "^4.6.6"
+    }
   }
 }

@@ -1,5 +1,5 @@
-# Use Node.js 20 slim as base
-FROM node:20-slim
+# Use Node.js 22 slim as base
+FROM node:22-slim
 
 # Install FFmpeg
 RUN apt-get update && \

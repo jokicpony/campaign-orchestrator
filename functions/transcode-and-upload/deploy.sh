@@ -45,7 +45,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
     --project="${PROJECT_ID}" \
     --region="${REGION}" \
     --gen2 \
-    --runtime=nodejs20 \
+    --runtime=nodejs22 \
     --source="${FUNCTION_DIR}" \
     --entry-point=transcodeAndUpload \
     --trigger-http \

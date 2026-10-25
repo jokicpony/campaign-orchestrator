@@ -9,6 +9,14 @@ const JPEG_QUALITY = 80;
 const MAX_SOURCE_BYTES = 40 * 1024 * 1024; // reject sources larger than 40 MB
 const MAX_INPUT_PIXELS = 100_000_000; // sharp decompression-bomb guard (~100 MP)
 
+/** True for SVG/XML (`<` after an optional BOM/whitespace) or gzip (.svgz). */
+function looksLikeMarkup(buf: Buffer): boolean {
+    if (buf[0] === 0x1f && buf[1] === 0x8b) return true;
+    let i = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0;
+    while (i < buf.length && i < 1024 && (buf[i] === 0x20 || buf[i] === 0x09 || buf[i] === 0x0a || buf[i] === 0x0d)) i++;
+    return buf[i] === 0x3c;
+}
+
 /**
  * POST /api/thumbnail-resize
  *
@@ -96,6 +104,12 @@ export async function POST(request: NextRequest) {
             if (imageBuffer.byteLength > MAX_SOURCE_BYTES) {
                 return NextResponse.json({ error: 'Source image too large' }, { status: 413 });
             }
+        }
+
+        // Never hand SVG/XML to sharp: librsvg is its most exposed decoder
+        // (CVE-2026-96889), and Meta can't use SVG creative anyway.
+        if (looksLikeMarkup(imageBuffer)) {
+            return NextResponse.json({ error: 'SVG images are not supported' }, { status: 415 });
         }
 
         // Resize with sharp — fit within TARGET_SIZE on longest edge

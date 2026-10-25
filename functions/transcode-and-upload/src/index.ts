@@ -247,7 +247,7 @@ ff.http('transcodeAndUpload', async (req: Request, res: Response) => {
         adAccountId,
         driveFileId,
         fileName,
-    } = req.body as TranscodeRequest;
+    } = (req.body ?? {}) as TranscodeRequest; // Express 5 leaves body undefined when empty
 
     // Validate required fields
     if (!googleAccessToken || !metaAccessToken || !adAccountId || !driveFileId) {

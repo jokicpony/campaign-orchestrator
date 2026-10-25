@@ -162,9 +162,18 @@ retired; update `AVAILABLE_AI_MODELS` in `src/types/index.ts`.
   the constant in `functions/transcode-and-upload/src/index.ts` and `GRAPH` in
   `scripts/probe-multi-media.mts`; redeploy the app and the function, and test
   a publish of every ad type.
-- **The Cloud Function runs Node 20** (`--runtime=nodejs20`), which is past
-  end-of-life; move it to a supported runtime before Google stops deploying
-  it.
+- **Runtimes and security patches.** The app pins `engines.node` to
+  `>=22 <25` (Vercel picks the newest patched line in range) and the Cloud
+  Function runs `nodejs22` (`deploy.sh`), which leaves support in April 2027.
+  A major move means editing those two places, redeploying the function and
+  testing a >50 MB video. Watch the Next.js blog's security releases:
+  `npm audit` has missed advisories for days after they were announced.
+- **`npm audit` findings accepted as not applicable:** `@grpc/grpc-js` 1.9
+  under `firebase` (Firebase pins `~1.9`; both advisories are gRPC-server
+  behaviours and the browser SDK talks WebChannel) and `uuid` under the
+  function's `cloudevents` (only `v3/v5/v6` with a caller buffer).
+  `@vercel/oidc`'s pinned zod is lifted by an `overrides` entry in
+  `package.json`.
 - **The Flexible ad type** relies on a field Meta no longer documents
   (`creative_asset_groups_spec`); it may stop working at a version sunset.
   Multi-Media replaces it.

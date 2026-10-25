@@ -9,10 +9,10 @@
     "dev": "npx functions-framework --target=transcodeAndUpload --port=8080"
   },
   "dependencies": {
-    "@google-cloud/functions-framework": "^3.4.0"
+    "@google-cloud/functions-framework": "^5.0.5"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
   }
 }

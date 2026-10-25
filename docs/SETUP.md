@@ -219,7 +219,7 @@ gcloud secrets add-iam-policy-binding transcode-api-key --project=$PROJECT \
 # First deploy (deploy.sh handles later updates)
 (cd functions/transcode-and-upload && npm ci && npm run build)
 gcloud functions deploy transcode-and-upload --gen2 --region=us-central1 --project=$PROJECT \
-  --runtime=nodejs20 --source=functions/transcode-and-upload --entry-point=transcodeAndUpload \
+  --runtime=nodejs22 --source=functions/transcode-and-upload --entry-point=transcodeAndUpload \
   --trigger-http --memory=2Gi --timeout=540s --set-build-env-vars=GOOGLE_NODE_RUN_SCRIPTS="" \
   --service-account=$FN_SA --allow-unauthenticated \
   --set-secrets=TRANSCODE_API_KEY=transcode-api-key:latest

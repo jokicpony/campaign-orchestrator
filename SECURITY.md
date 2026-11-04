@@ -13,7 +13,7 @@ reports are taken seriously and fixed before public disclosure.
 ## Scope
 
 This policy covers the Campaign Orchestrator code. Problems in the services it
-uses (Firebase, Google Cloud, Vercel, Meta, the AI providers) go to those
+uses (Firebase, Google Cloud, Vercel, Meta, Gemini) go to those
 vendors. Your own instance's configuration — allowlists, rules, keys — is your
 responsibility; [docs/SETUP.md](docs/SETUP.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#who-is-allowed-to-do-what) describe
@@ -25,13 +25,15 @@ the intended setup.
   route verifies the Firebase ID token and checks the email against
   `AUTHORIZED_EMAILS` / `AUTHORIZED_EMAIL_DOMAINS`. In production an empty
   allowlist **denies everyone**. `ALLOW_ALL_AUTHENTICATED=true` admits any
-  Google account to the API (and your server AI keys); it isn't a supported
+  Google account to the API (and your Gemini key); it isn't a supported
   public mode.
 - **Firestore:** `firestore.rules` lets team members (the same allowlist,
   repeated in the rules) share campaigns and settings, keeps per-user data
   owner-only, and denies all clients access to `serverSecrets`.
-- **Meta tokens and personal AI keys** are stored in `serverSecrets/{uid}` and
-  never sent to the browser, accepted in request bodies, or put in URLs. Meta
+- **Meta tokens** are stored in `serverSecrets/{uid}` and never sent to the
+  browser, accepted in request bodies, or put in URLs. The **Gemini key** is a
+  server env var with the same rules; AI usage totals (`aiUsage`) are
+  server-only too. Meta
   OAuth is CSRF-protected with a `state` cookie; Page access tokens are never
   fetched.
 - **No key files:** the server reaches Firestore through Workload Identity
@@ -43,7 +45,13 @@ the intended setup.
   streaming carries it in a `SameSite=Strict` cookie scoped to the proxy route,
   not in URLs.
 - **Outbound fetches:** the thumbnail proxy allows only Google hosts, re-checks
-  every redirect and caps response size.
+  every redirect and caps response size. Campaign Context links can be any
+  public URL: `fetchPublicPage` (`src/lib/server/safeFetch.ts`) checks the
+  address actually connected to on every redirect and refuses private,
+  loopback and link-local addresses. Page text reaches the model fenced inside
+  `<page>` tags as data.
+- **Ids from the browser** are validated (`src/lib/server/ids.ts`) before they
+  go into a Graph or Drive URL path.
 - **Transcode function (optional):** publicly invocable but refuses requests
   without the shared `TRANSCODE_API_KEY` (constant-time compare, fails closed
   when unset). It is given no Google or Meta credentials of its own; deploy it

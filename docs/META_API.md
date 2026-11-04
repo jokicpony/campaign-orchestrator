@@ -143,34 +143,13 @@ exactly; Ads Manager shows the ad as "Uploaded media" with the stack intact.
 image in a stack, objectives other than Sales, delivery per item
 (`/insights?breakdowns=media_asset` after spend).
 
-### Flexible (`flexible`) — the previous format, kept as a fallback
+### Flexible (`flexible`) — retired Nov 2026
 
-`creative_asset_groups_spec`, sent with the ad:
-
-```jsonc
-{
-  "creative": {
-    "object_story_spec": { "page_id": "…",
-      "link_data": { "link": "…", "image_hash": "<FIRST_IMAGE_HASH>" } },  // or video_data
-    "url_tags": "…"
-  },
-  "creative_asset_groups_spec": { "groups": [{
-    "images": [{ "hash": "…" }], "videos": [{ "video_id": "…" }],
-    "texts": [{ "text": "…", "text_type": "primary_text" }, { "text": "…", "text_type": "headline" }],
-    "call_to_action": { "type": "LEARN_MORE", "value": { "link": "…" } }
-  }] }
-}
-```
-
-- The image/video in `object_story_spec` **must be the group's first asset**
-  ("Flexible Format Image/Video Mismatch" otherwise).
-- Only `OUTCOME_SALES` and `OUTCOME_APP_PROMOTION` campaigns. The wizard
-  enforces this for new campaigns, not for existing ones.
-- **Meta removed this field from the read schema** (reading it errors on every
-  version) but still accepts it on write and converts it — stored Flexible
-  ads read back as multi-media items. It can stop working at any version
-  sunset. Multi-Media is its replacement; Flexible stays available as a
-  fallback.
+The app used to publish Flexible ads through `creative_asset_groups_spec`, a
+write-only shim Meta converts into multi-media items. Multi-Media replaced it
+and has published reliably through the app, so the type is gone from Build
+and the route rejects it. Stored Flexible ads still read back as multi-media
+items. The old payload is in git history (this section before the removal).
 
 ### Carousel (`carousel`)
 
@@ -208,8 +187,10 @@ is published.
   through the write shim and wait.
 - **Sep 2026:** Meta documented multi-media ads (`media_sourcing_spec`).
 - **Oct 2026:** Ads-Manager ads read back with `media_sourcing_spec`,
-  stacks modelled as `group_id` + `variant_types`. The Multi-Media ad type
-  was added, built to match.
+  stacks modelled as `group_id` + `variant_types`. The app's Multi-Media type
+  shipped (8 Oct), built to match.
+- **Nov 2026:** after several real publishes through the app, Flexible was
+  retired; Multi-Media is the only multi-asset format.
 
 The full multi-media probe write-up is in git history:
 `git show 3aaf617:docs/MULTI_MEDIA_ADS.md`.

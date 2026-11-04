@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
+import { isDriveFileId } from '@/lib/server/ids';
 import { logger, serializeError } from '@/lib/logger';
 
 export async function POST(request: NextRequest) {
@@ -27,6 +28,9 @@ export async function POST(request: NextRequest) {
                 { error: 'fileId and newName are required' },
                 { status: 400 }
             );
+        }
+        if (!isDriveFileId(fileId) || typeof newName !== 'string') {
+            return NextResponse.json({ error: 'Invalid fileId or newName' }, { status: 400 });
         }
 
         logger.info('drive', `Renaming file ${fileId}`, { newName });

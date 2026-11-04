@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
+import { isDriveFileId } from '@/lib/server/ids';
 import { logger, serializeError } from '@/lib/logger';
 import sharp from 'sharp';
 
@@ -39,6 +40,9 @@ export async function POST(request: NextRequest) {
                 { error: 'driveFileId and driveAccessToken are required' },
                 { status: 400 }
             );
+        }
+        if (!isDriveFileId(driveFileId)) {
+            return NextResponse.json({ error: 'Invalid driveFileId' }, { status: 400 });
         }
 
         let imageBuffer: Buffer;
@@ -133,7 +137,7 @@ export async function POST(request: NextRequest) {
     } catch (error) {
         logger.error('thumbnail', 'Resize error', { error: serializeError(error) });
         return NextResponse.json(
-            { error: 'Failed to resize thumbnail', details: String(error) },
+            { error: 'Failed to resize thumbnail' },
             { status: 500 }
         );
     }

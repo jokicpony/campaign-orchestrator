@@ -56,7 +56,7 @@ export function AdSetupSettings({ settings, onChange }: AdSetupSettingsProps) {
             <div>
                 <h2 className="text-lg font-semibold text-foreground mb-1">Ad Setup</h2>
                 <p className="text-sm text-foreground-muted">
-                    Configure ad types, naming conventions, and tracking for your campaigns
+                    Ad types, names, audience and tracking for every campaign
                 </p>
             </div>
 
@@ -80,8 +80,7 @@ export function AdSetupSettings({ settings, onChange }: AdSetupSettingsProps) {
                 >
                     <div className="space-y-4">
                         <p className="text-sm text-foreground-muted">
-                            Defaults applied to the audience of every ad set you publish.
-                            You can still adjust targeting per campaign in Ads Manager afterward.
+                            Applies to every ad set you publish.
                         </p>
 
                         <div>
@@ -92,7 +91,7 @@ export function AdSetupSettings({ settings, onChange }: AdSetupSettingsProps) {
                                 type="number"
                                 min={13}
                                 max={65}
-                                value={settings.defaultAgeMin ?? 21}
+                                value={settings.defaultAgeMin ?? 18}
                                 onChange={(e) => {
                                     const n = parseInt(e.target.value, 10);
                                     onChange({ defaultAgeMin: Number.isFinite(n) ? n : undefined });
@@ -104,9 +103,7 @@ export function AdSetupSettings({ settings, onChange }: AdSetupSettingsProps) {
                                 className="w-28 px-3 py-2 rounded-lg bg-background-tertiary border border-border focus:border-cyan-500 focus:outline-none text-foreground text-sm"
                             />
                             <p className="mt-2 text-xs text-foreground-muted">
-                                Applied to every published ad set (Meta allows 13–65). Automatically
-                                omitted for Special Ad Categories, which forbid age targeting.
-                                Regulated verticals such as alcohol use <strong>21</strong>.
+                                13–65. Skipped for Special Ad Categories. Age-restricted products (e.g. alcohol in the US) need <strong>21</strong>.
                             </p>
                         </div>
                     </div>
@@ -141,8 +138,7 @@ export function AdSetupSettings({ settings, onChange }: AdSetupSettingsProps) {
                 >
                     <div className="space-y-4">
                         <p className="text-sm text-foreground-muted">
-                            Add tracking parameters that will be appended to all destination URLs during publishing.
-                            Meta supports dynamic parameters like <code className="px-1 py-0.5 rounded bg-background-tertiary text-cyan-400">{'{{campaign.name}}'}</code> and <code className="px-1 py-0.5 rounded bg-background-tertiary text-cyan-400">{'{{ad.name}}'}</code>.
+                            Added to every destination URL at publish. Meta fills in <code className="px-1 py-0.5 rounded bg-background-tertiary text-cyan-400">{'{{campaign.name}}'}</code> and <code className="px-1 py-0.5 rounded bg-background-tertiary text-cyan-400">{'{{ad.name}}'}</code>.
                         </p>
 
                         <div>

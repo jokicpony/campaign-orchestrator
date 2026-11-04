@@ -72,7 +72,6 @@ export function MediaStacks({ assets, size = 'md', selectedIndex, onSelect }: Me
                                         style={{ width: card, height: card, left: position * offset, top: spread - position * offset }}
                                     >
                                         {src ? (
-                                            // eslint-disable-next-line @next/next/no-img-element
                                             <img src={src} alt={asset.name} className="w-full h-full object-cover" />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center">

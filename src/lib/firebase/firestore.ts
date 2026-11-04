@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { Campaign, CampaignBrief, GlobalPromptSettings, DEFAULT_GLOBAL_SETTINGS, mergeAdTypes } from '@/types';
+import { retireFlexible } from '@/types/ad-types';
 
 // ============================================
 // Type Converters
@@ -80,6 +81,12 @@ function fromFirestoreData<T>(data: Record<string, unknown>): T {
 
 const campaignsCollection = collection(db, 'campaigns');
 
+/** A campaign as the app uses it: dates restored, and retired Flexible rows opened as Multi-Media. */
+function campaignFromDoc(data: Record<string, unknown>, id: string): Campaign {
+    const campaign = fromFirestoreData<Campaign>(data);
+    return { ...campaign, id, rows: (campaign.rows ?? []).map(retireFlexible) };
+}
+
 export async function getCampaign(campaignId: string): Promise<Campaign | null> {
     const docRef = doc(db, 'campaigns', campaignId);
     const docSnap = await getDoc(docRef);
@@ -88,19 +95,15 @@ export async function getCampaign(campaignId: string): Promise<Campaign | null> 
         return null;
     }
 
-    const data = docSnap.data();
-    return {
-        ...fromFirestoreData<Campaign>(data),
-        id: docSnap.id,
-    };
+    return campaignFromDoc(docSnap.data(), docSnap.id);
 }
 
 export async function createCampaign(userId: string, name: string): Promise<Campaign> {
     const defaultBrief: CampaignBrief = {
-        productId: null,
-        targetAudience: '',
         keyMessages: '',
         driveFolderUrl: null,
+        contextLinks: [],
+        contextPages: [],
     };
 
     const newCampaign: Omit<Campaign, 'id'> = {
@@ -193,10 +196,7 @@ export async function listAllCampaigns(): Promise<Campaign[]> {
     const campaigns: Campaign[] = [];
 
     snapshot.forEach((doc) => {
-        campaigns.push({
-            ...fromFirestoreData<Campaign>(doc.data()),
-            id: doc.id,
-        });
+        campaigns.push(campaignFromDoc(doc.data(), doc.id));
     });
 
     // Sort by position (if set), then by createdAt
@@ -286,46 +286,8 @@ export async function refreshLock(campaignId: string, userId: string): Promise<b
 }
 
 // ============================================
-// User Preferences
+// Users
 // ============================================
-
-export interface UserPreferences {
-    defaultTemperature: number;
-    brandVoice?: {
-        personaInstructions: string;
-        negativeConstraints: string[];
-    };
-    customModifiers?: Array<{
-        id: string;
-        label: string;
-        emoji: string;
-        promptInjection: string;
-    }>;
-}
-
-export async function getUserPreferences(userId: string): Promise<UserPreferences | null> {
-    const docRef = doc(db, 'users', userId);
-    const docSnap = await getDoc(docRef);
-
-    if (!docSnap.exists()) {
-        return null;
-    }
-
-    const data = docSnap.data();
-    return data.preferences as UserPreferences || null;
-}
-
-export async function saveUserPreferences(
-    userId: string,
-    preferences: Partial<UserPreferences>
-): Promise<void> {
-    const docRef = doc(db, 'users', userId);
-
-    await setDoc(docRef, {
-        preferences,
-        updatedAt: serverTimestamp(),
-    }, { merge: true });
-}
 
 export async function initializeUserDocument(
     userId: string,
@@ -341,9 +303,6 @@ export async function initializeUserDocument(
             displayName,
             email,
             photoURL: photoURL || null,
-            preferences: {
-                defaultTemperature: 0.6,
-            },
             createdAt: serverTimestamp(),
         });
     }
@@ -365,17 +324,46 @@ export async function getGlobalSettings(): Promise<GlobalPromptSettings> {
         return DEFAULT_GLOBAL_SETTINGS;
     }
 
-    const data = docSnap.data();
-    const settings = {
-        ...DEFAULT_GLOBAL_SETTINGS,
-        ...fromFirestoreData<Partial<GlobalPromptSettings>>(data),
-    };
+    const raw = fromFirestoreData<Record<string, unknown>>(docSnap.data());
+    const settings = { ...DEFAULT_GLOBAL_SETTINGS, ...raw } as GlobalPromptSettings & Record<string, unknown>;
+    // Before Oct 2026 the copywriter had a persona, brand knowledge, an emoji
+    // setting and a persona catalog. Fold them into the two text boxes the
+    // first time; the next save writes brandVoice/targetPersonas.
+    if (typeof raw.brandVoice !== 'string') settings.brandVoice = legacyBrandVoice(raw);
+    if (typeof raw.targetPersonas !== 'string') settings.targetPersonas = legacyPersonas(raw);
+    for (const key of LEGACY_SETTINGS_KEYS) delete settings[key];
     // Saved adTypes may predate newer built-in types (e.g. Carousel) —
     // normalize here so consumers always see the full list
     return {
         ...settings,
         adTypes: mergeAdTypes(settings.adTypes),
     };
+}
+
+const LEGACY_SETTINGS_KEYS = [
+    'copywriterPersona', 'brandKnowledge', 'emojiDensity', 'modifiers', 'iterationActions',
+    'products', 'customerPersonas', 'defaultTemperature', 'aiProvider', 'aiModel', 'providerKeys',
+];
+
+const LEGACY_EMOJI: Record<string, string> = {
+    none: 'Never use emoji.',
+    sparse: 'Use emoji sparingly: at most one per piece of copy.',
+    liberal: 'Emoji are welcome.',
+};
+
+export function legacyBrandVoice(raw: Record<string, unknown>): string {
+    const parts = [raw.copywriterPersona, raw.brandKnowledge, LEGACY_EMOJI[String(raw.emojiDensity)]]
+        .filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+        .map(p => p.trim());
+    return parts.join('\n\n');
+}
+
+export function legacyPersonas(raw: Record<string, unknown>): string {
+    if (!Array.isArray(raw.customerPersonas)) return '';
+    return (raw.customerPersonas as { name?: string; description?: string }[])
+        .filter(p => p && (p.name || p.description))
+        .map(p => [p.name, p.description].filter(Boolean).join(': '))
+        .join('\n\n');
 }
 
 /**

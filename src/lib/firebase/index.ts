@@ -12,10 +12,7 @@ export {
     releaseLock,
     refreshLock,
     // User
-    getUserPreferences,
-    saveUserPreferences,
     initializeUserDocument,
-    type UserPreferences,
     // Global Settings
     getGlobalSettings,
     updateGlobalSettings,

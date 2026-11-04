@@ -22,7 +22,7 @@ interface AssetPickerPopoverProps {
 
 /**
  * Simplified asset picker popover that shows pre-loaded assets.
- * Folder config is now handled at the campaign level via DriveFolderConfig.
+ * The campaign's Drive folder is chosen in the Assets tab (AssetLibrary).
  */
 export function AssetPickerPopover({
     isOpen,
@@ -79,7 +79,8 @@ export function AssetPickerPopover({
             if (updated.has(asset.id)) {
                 updated.delete(asset.id);
             } else {
-                // Check if limit reached
+                // A one-asset type swaps its pick; others stop at the limit
+                if (maxSelection === 1) return new Set([asset.id]);
                 if (maxSelection && updated.size >= maxSelection) {
                     return prev; // Block selection
                 }

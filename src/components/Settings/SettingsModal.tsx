@@ -1,16 +1,14 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, Settings2, Package, Users, Sparkles, Link, Wand2, Layers, Archive } from 'lucide-react';
+import { X, Save, Settings2, Sparkles, Link, Layers, Archive, BarChart3 } from 'lucide-react';
 import { GlobalPromptSettings, Campaign } from '@/types';
 import { BrandVoiceSettings } from './BrandVoiceSettings';
-import { ProductsSettings } from './ProductsSettings';
-import { PersonasSettings } from './PersonasSettings';
-import { ModifiersSettings } from './ModifiersSettings';
 import { ConnectionsSettings } from './ConnectionsSettings';
 import { AdSetupSettings } from './AdSetupSettings';
 import { ArchivedCampaigns } from './ArchivedCampaigns';
+import { UsageSettings } from './UsageSettings';
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -24,19 +22,18 @@ interface SettingsModalProps {
     savingCampaigns?: boolean;
 }
 
-type TabId = 'connections' | 'archived' | 'adsetup' | 'brand' | 'products' | 'personas' | 'modifiers';
+type TabId = 'connections' | 'adsetup' | 'brand' | 'usage' | 'archived';
 
-// Grouped tabs for visual organization
-const CONNECTIONS_TAB = { id: 'connections' as TabId, label: 'Connections', icon: <Link className="w-4 h-4" /> };
-const ARCHIVED_TAB = { id: 'archived' as TabId, label: 'Archived', icon: <Archive className="w-4 h-4" /> };
-const AD_SETUP_TAB = { id: 'adsetup' as TabId, label: 'Ad Setup', icon: <Layers className="w-4 h-4" /> };
-
-const AI_COWRITER_TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
-    { id: 'brand', label: 'Brand Voice', icon: <Settings2 className="w-4 h-4" /> },
-    { id: 'products', label: 'Products', icon: <Package className="w-4 h-4" /> },
-    { id: 'personas', label: 'Personas', icon: <Users className="w-4 h-4" /> },
-    { id: 'modifiers', label: 'Modifiers', icon: <Sparkles className="w-4 h-4" /> },
+const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
+    { id: 'connections', label: 'Connections', icon: <Link className="w-4 h-4" /> },
+    { id: 'adsetup', label: 'Ad Setup', icon: <Layers className="w-4 h-4" /> },
+    { id: 'brand', label: 'Copywriter', icon: <Sparkles className="w-4 h-4" /> },
+    { id: 'usage', label: 'Usage', icon: <BarChart3 className="w-4 h-4" /> },
+    { id: 'archived', label: 'Archived', icon: <Archive className="w-4 h-4" /> },
 ];
+
+// Tabs whose edits are held locally until Save
+const SAVED_TABS: TabId[] = ['adsetup', 'brand'];
 
 export function SettingsModal({
     isOpen,
@@ -53,13 +50,22 @@ export function SettingsModal({
     const [isSaving, setIsSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(false);
 
-    // Reset local settings when modal opens with new settings
-    useEffect(() => {
+    // Start from the team's settings each time the modal opens, and take the
+    // fresh copy that arrives just after opening unless you've already edited.
+    // (State adjusted during render rather than in an effect, per react.dev.)
+    const [wasOpen, setWasOpen] = useState(isOpen);
+    const [seenSettings, setSeenSettings] = useState(settings);
+    if (isOpen !== wasOpen) {
+        setWasOpen(isOpen);
         if (isOpen) {
             setLocalSettings(settings);
+            setSeenSettings(settings);
             setHasChanges(false);
         }
-    }, [isOpen, settings]);
+    } else if (isOpen && settings !== seenSettings) {
+        setSeenSettings(settings);
+        if (!hasChanges) setLocalSettings(settings);
+    }
 
     const handleSettingsChange = (updates: Partial<GlobalPromptSettings>) => {
         setLocalSettings(prev => ({ ...prev, ...updates }));
@@ -79,17 +85,24 @@ export function SettingsModal({
         }
     };
 
-    const handleCancel = () => {
-        if (hasChanges) {
-            // Could add confirmation dialog here
-        }
+    // Cancel, the X, a click outside and Escape all close; unsaved edits ask first.
+    const handleCancel = useCallback(() => {
+        if (hasChanges && !window.confirm('Discard your unsaved settings changes?')) return;
         onClose();
-    };
+    }, [hasChanges, onClose]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' && !e.defaultPrevented) handleCancel();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isOpen, handleCancel]);
 
     if (!isOpen) return null;
 
-    // Check if current tab is an AI Co-Writer tab (needs save button)
-    const isAiCowriterTab = activeTab !== 'connections' && activeTab !== 'archived';
+    const isSavedTab = SAVED_TABS.includes(activeTab);
 
     return (
         <AnimatePresence>
@@ -121,7 +134,7 @@ export function SettingsModal({
                             >
                                 Cancel
                             </button>
-                            {isAiCowriterTab && (
+                            {isSavedTab && (
                                 <button
                                     onClick={handleSave}
                                     disabled={!hasChanges || isSaving}
@@ -144,54 +157,7 @@ export function SettingsModal({
                     <div className="flex flex-1 overflow-hidden">
                         {/* Sidebar Tabs */}
                         <div className="w-52 border-r border-border bg-background-secondary p-3 space-y-1">
-                            {/* Connections Tab */}
-                            <button
-                                onClick={() => setActiveTab(CONNECTIONS_TAB.id)}
-                                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === CONNECTIONS_TAB.id
-                                    ? 'bg-accent-primary/20 text-accent-primary'
-                                    : 'text-foreground-muted hover:text-foreground hover:bg-background-tertiary'
-                                    }`}
-                            >
-                                {CONNECTIONS_TAB.icon}
-                                {CONNECTIONS_TAB.label}
-                            </button>
-
-                            {/* Ad Setup Tab (combined Ad Types + Naming) */}
-                            <button
-                                onClick={() => setActiveTab(AD_SETUP_TAB.id)}
-                                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === AD_SETUP_TAB.id
-                                    ? 'bg-accent-primary/20 text-accent-primary'
-                                    : 'text-foreground-muted hover:text-foreground hover:bg-background-tertiary'
-                                    }`}
-                            >
-                                {AD_SETUP_TAB.icon}
-                                {AD_SETUP_TAB.label}
-                            </button>
-
-                            {/* Archived Campaigns Tab */}
-                            <button
-                                onClick={() => setActiveTab(ARCHIVED_TAB.id)}
-                                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === ARCHIVED_TAB.id
-                                    ? 'bg-accent-primary/20 text-accent-primary'
-                                    : 'text-foreground-muted hover:text-foreground hover:bg-background-tertiary'
-                                    }`}
-                            >
-                                {ARCHIVED_TAB.icon}
-                                {ARCHIVED_TAB.label}
-                            </button>
-
-                            {/* Divider with AI Co-Writer label */}
-                            <div className="pt-4 pb-2">
-                                <div className="flex items-center gap-2 px-3 py-1">
-                                    <Wand2 className="w-3.5 h-3.5 text-purple-400" />
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground-subtle">
-                                        AI Co-Writer
-                                    </span>
-                                </div>
-                            </div>
-
-                            {/* AI Co-Writer Tabs */}
-                            {AI_COWRITER_TABS.map(tab => (
+                            {TABS.map(tab => (
                                 <button
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
@@ -217,31 +183,14 @@ export function SettingsModal({
                                     onChange={handleSettingsChange}
                                 />
                             )}
-                            {activeTab === 'products' && (
-                                <ProductsSettings
-                                    products={localSettings.products}
-                                    onChange={(products) => handleSettingsChange({ products })}
-                                />
-                            )}
-                            {activeTab === 'personas' && (
-                                <PersonasSettings
-                                    personas={localSettings.customerPersonas}
-                                    onChange={(customerPersonas) => handleSettingsChange({ customerPersonas })}
-                                />
-                            )}
-                            {activeTab === 'modifiers' && (
-                                <ModifiersSettings
-                                    modifiers={localSettings.modifiers}
-                                    iterationActions={localSettings.iterationActions}
-                                    onModifiersChange={(modifiers) => handleSettingsChange({ modifiers })}
-                                    onIterationActionsChange={(iterationActions) => handleSettingsChange({ iterationActions })}
-                                />
-                            )}
                             {activeTab === 'adsetup' && (
                                 <AdSetupSettings
                                     settings={localSettings}
                                     onChange={handleSettingsChange}
                                 />
+                            )}
+                            {activeTab === 'usage' && (
+                                <UsageSettings />
                             )}
                             {activeTab === 'archived' && (
                                 <ArchivedCampaigns

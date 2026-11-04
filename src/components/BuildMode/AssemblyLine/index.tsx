@@ -28,6 +28,14 @@ interface AssemblyLineProps {
     hasFolderConfigured?: boolean;
     // Whether assets are currently loading
     isAssetsLoading?: boolean;
+    // Copywriter (in the Palette): which row it writes for, and how a row aims it
+    copyTargetRowId?: string | null;
+    onAimCopywriter?: (rowId: string) => void;
+    /** Working in a row (a click or focus inside it) makes it the selected ad. */
+    onSelectRow?: (rowId: string) => void;
+    /** The campaign's Context: a button beside Add Row and the panel it opens under the header. */
+    contextButton?: React.ReactNode;
+    contextPanel?: React.ReactNode;
 }
 
 export function AssemblyLine({
@@ -45,6 +53,11 @@ export function AssemblyLine({
     onRefreshAssets,
     hasFolderConfigured,
     isAssetsLoading,
+    copyTargetRowId,
+    onAimCopywriter,
+    onSelectRow,
+    contextButton,
+    contextPanel,
 }: AssemblyLineProps) {
 
     // Compute how many times each asset is used across all rows
@@ -72,7 +85,7 @@ export function AssemblyLine({
                         </div>
                         <div className="flex flex-col">
                             <h2 className="text-lg font-semibold text-foreground">Assembly Line</h2>
-                            <span className="text-[10px] text-foreground-subtle">Ad Workspace • {rows.length} row{rows.length !== 1 ? 's' : ''}</span>
+                            <span className="text-[10px] text-foreground-subtle">{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -81,6 +94,7 @@ export function AssemblyLine({
                                 {cachedDriveAssets.length} assets loaded
                             </span>
                         )}
+                        {contextButton}
                         <button
                             onClick={onAddRow}
                             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 transition-colors text-sm font-medium text-white"
@@ -92,6 +106,8 @@ export function AssemblyLine({
                 </div>
             </div>
 
+            {contextPanel}
+
             {/* Scrollable Content Area */}
             <div className="flex-1 overflow-y-auto p-6 pl-5">
                 {rows.length === 0 ? (
@@ -101,10 +117,7 @@ export function AssemblyLine({
                         className="flex flex-col items-center justify-center py-16 border-2 border-dashed border-border rounded-xl"
                     >
                         <Layers className="w-12 h-12 text-foreground-subtle mb-4" />
-                        <p className="text-foreground-muted text-lg mb-2">No ads yet</p>
-                        <p className="text-foreground-subtle text-sm mb-6">
-                            Add a row to start building your campaign
-                        </p>
+                        <p className="text-foreground-muted text-lg mb-6">No ads yet</p>
                         <button
                             onClick={onAddRow}
                             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent-primary hover:bg-accent-primary-hover transition-colors font-medium"
@@ -139,6 +152,9 @@ export function AssemblyLine({
                                     onRefreshAssets={onRefreshAssets}
                                     hasFolderConfigured={hasFolderConfigured}
                                     isAssetsLoading={isAssetsLoading}
+                                    isCopyTarget={row.id === copyTargetRowId}
+                                    onAimCopywriter={onAimCopywriter ? () => onAimCopywriter(row.id) : undefined}
+                                    onSelect={onSelectRow ? () => onSelectRow(row.id) : undefined}
                                 />
                             </motion.div>
                         ))}

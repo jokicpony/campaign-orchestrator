@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
+import { isMetaId } from '@/lib/server/ids';
 import { requireMetaToken } from '@/lib/server/metaAuth';
 import { logger, serializeError, serializeMetaError } from '@/lib/logger';
 
@@ -66,6 +67,9 @@ export async function POST(request: NextRequest) {
                 { error: 'adAccountId and campaignId are required' },
                 { status: 400 }
             );
+        }
+        if (!isMetaId(adAccountId) || !isMetaId(campaignId)) {
+            return NextResponse.json({ error: 'Invalid adAccountId or campaignId' }, { status: 400 });
         }
 
         if (!name) {

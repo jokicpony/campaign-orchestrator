@@ -12,6 +12,7 @@ import {
     variantTypeFor,
     type StackableAsset,
 } from '../src/lib/meta/multiMedia.ts';
+import { retireFlexible, STANDARDIZED_AD_TYPES } from '../src/types/ad-types.ts';
 
 const sq = { width: 1080, height: 1080 };
 const tall = { width: 1080, height: 1920 };
@@ -88,5 +89,12 @@ assert.equal(videos[0].group_id, undefined);
 assert.equal(built.items[0].hash, 'a'); // primary preserved
 assert.equal(built.groupCount, 2);
 assert.equal(built.droppedDuplicates, 1);
+
+// Flexible was retired: saved rows open as Multi-Media, and it isn't offered
+assert.equal(retireFlexible({ id: 'r', adType: 'flexible' }).adType, 'multi_media');
+assert.equal(retireFlexible({ id: 'r', adType: 'carousel' }).adType, 'carousel');
+const untyped = { id: 'r' };
+assert.equal(retireFlexible(untyped), untyped);
+assert.ok(!STANDARDIZED_AD_TYPES.some(t => (t.id as string) === 'flexible'));
 
 console.log('multi-media checks passed');

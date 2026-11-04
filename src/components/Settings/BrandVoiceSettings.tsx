@@ -1,340 +1,125 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { GlobalPromptSettings, AIProvider, AVAILABLE_AI_MODELS, AI_PROVIDER_INFO } from '@/types';
-import { authedFetch } from '@/lib/api/authedFetch';
-import { X, Cpu } from 'lucide-react';
-
-type KeyStatus = Record<AIProvider, { userKey: boolean; envKey: boolean }>;
-
-// Secure per-user key manager. Keys are set/cleared via the authenticated
-// /api/ai/keys endpoint and stored server-side only (owner-only) — values are
-// never returned to the client or written to a client-readable doc.
-function ProviderKeyManager() {
-    const [status, setStatus] = useState<KeyStatus | null>(null);
-    const [editing, setEditing] = useState<AIProvider | null>(null);
-    const [inputValue, setInputValue] = useState('');
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    const load = useCallback(async () => {
-        try {
-            const res = await authedFetch('/api/ai/keys');
-            if (res.ok) setStatus((await res.json()).providers);
-        } catch { /* ignore */ }
-    }, []);
-
-    useEffect(() => { load(); }, [load]);
-
-    const saveKey = async (provider: AIProvider) => {
-        if (inputValue.trim().length < 8) return;
-        setBusy(true); setError(null);
-        try {
-            const res = await authedFetch('/api/ai/keys', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider, key: inputValue.trim() }),
-            });
-            if (!res.ok) {
-                setError((await res.json().catch(() => ({}))).error || 'Failed to save key');
-            } else {
-                setEditing(null); setInputValue(''); await load();
-            }
-        } finally { setBusy(false); }
-    };
-
-    const removeKey = async (provider: AIProvider) => {
-        setBusy(true); setError(null);
-        try {
-            const res = await authedFetch('/api/ai/keys', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider }),
-            });
-            if (res.ok) await load();
-        } finally { setBusy(false); }
-    };
-
-    return (
-        <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Your API Keys</label>
-            <p className="text-xs text-foreground-muted">
-                Optional — add your own key per provider. It&apos;s stored securely server-side,
-                is private to you, and falls back to the server default when unset.
-            </p>
-            {error && <p className="text-xs text-red-400">{error}</p>}
-            {(['google', 'anthropic', 'openai'] as AIProvider[]).map(provider => {
-                const info = AI_PROVIDER_INFO[provider];
-                const s = status?.[provider];
-                const isEditing = editing === provider;
-                return (
-                    <div key={provider} className="p-3 rounded-lg border border-border bg-background-tertiary">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <span>{info.emoji}</span>
-                                <span className="text-sm text-foreground">{info.label}</span>
-                                {s?.userKey ? (
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/15 text-green-400">Your key</span>
-                                ) : s?.envKey ? (
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-foreground-muted">Server default</span>
-                                ) : (
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-foreground-subtle">Not set</span>
-                                )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                                {s?.userKey && !isEditing && (
-                                    <button onClick={() => removeKey(provider)} disabled={busy}
-                                        className="p-1 text-foreground-subtle hover:text-red-400 disabled:opacity-50" title="Remove your key">
-                                        <X className="w-3 h-3" />
-                                    </button>
-                                )}
-                                {!isEditing ? (
-                                    <button onClick={() => { setEditing(provider); setInputValue(''); setError(null); }}
-                                        className="px-2 py-1 text-xs text-foreground-muted hover:text-foreground">
-                                        {s?.userKey ? 'Change' : 'Add key'}
-                                    </button>
-                                ) : (
-                                    <button onClick={() => { setEditing(null); setInputValue(''); }}
-                                        className="px-2 py-1 text-xs text-foreground-subtle hover:text-foreground">Cancel</button>
-                                )}
-                            </div>
-                        </div>
-                        {isEditing && (
-                            <div className="mt-2 flex gap-2">
-                                <input type="password" value={inputValue}
-                                    onChange={e => setInputValue(e.target.value)}
-                                    placeholder={`Paste your ${info.label} API key…`}
-                                    className="flex-1 px-3 py-1.5 text-sm bg-background border border-border rounded-lg focus:outline-none focus:border-accent-primary font-mono placeholder:font-sans placeholder:text-foreground-subtle"
-                                    autoFocus
-                                    onKeyDown={e => { if (e.key === 'Enter' && inputValue.trim().length >= 8) saveKey(provider); }} />
-                                <button onClick={() => saveKey(provider)} disabled={busy || inputValue.trim().length < 8}
-                                    className="px-3 py-1.5 text-sm font-medium bg-accent-primary text-white rounded-lg hover:bg-accent-primary/90 disabled:opacity-50 disabled:cursor-not-allowed">
-                                    Save
-                                </button>
-                            </div>
-                        )}
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
+import React, { useEffect, useState } from 'react';
+import { CheckCircle2, AlertTriangle, Sparkles, X } from 'lucide-react';
+import { GlobalPromptSettings } from '@/types';
+import { getCopywriterStatus, type CopywriterStatus } from '@/lib/ai/copywriter';
 
 interface BrandVoiceSettingsProps {
     settings: GlobalPromptSettings;
     onChange: (updates: Partial<GlobalPromptSettings>) => void;
 }
 
-const CHAR_LIMITS = {
-    copywriterPersona: 800,
-    brandKnowledge: 2000,
-};
+const LIMITS = { brandVoice: 6000, targetPersonas: 6000, killList: 50 };
 
-// ─── BrandVoiceSettings ──────────────────────────────────────────
+// Shows which Gemini model the copywriter uses and whether the team key can
+// reach it. The key itself lives only in the server env (GEMINI_API_KEY).
+function ModelStatus() {
+    const [status, setStatus] = useState<CopywriterStatus | null>(null);
+    const [failed, setFailed] = useState(false);
 
-export function BrandVoiceSettings({ settings, onChange }: BrandVoiceSettingsProps) {
-    const activeProvider = settings.aiProvider || 'google';
-    const activeModel = settings.aiModel || 'gemini-2.5-flash';
+    useEffect(() => {
+        getCopywriterStatus().then(setStatus).catch(() => setFailed(true));
+    }, []);
 
-    // Filter models to only show for the active provider
-    const availableModels = AVAILABLE_AI_MODELS.filter(m => m.provider === activeProvider);
-
-    const handleSetActiveProvider = (provider: AIProvider) => {
-        const defaultModel = AVAILABLE_AI_MODELS.find(m => m.provider === provider)?.id;
-        onChange({
-            aiProvider: provider,
-            aiModel: defaultModel,
-        });
-    };
-
-    const handleKillListAdd = (value: string) => {
-        if (value.trim() && !settings.killList.includes(value.trim())) {
-            onChange({ killList: [...settings.killList, value.trim()] });
-        }
-    };
-
-    const handleKillListRemove = (value: string) => {
-        onChange({ killList: settings.killList.filter(item => item !== value) });
-    };
+    let tone: 'ok' | 'warn' = 'ok';
+    let message = 'Checking the Gemini key…';
+    if (failed) {
+        tone = 'warn';
+        message = 'Could not check the copywriter. Try again after reloading.';
+    } else if (status && !status.configured) {
+        tone = 'warn';
+        message = 'GEMINI_API_KEY is not set on the server, so the copywriter is off.';
+    } else if (status?.keyError) {
+        tone = 'warn';
+        message = `The Gemini key was rejected (${status.keyError}).`;
+    } else if (status?.modelAvailable === false) {
+        tone = 'warn';
+        message = `${status.model} isn't available to this key, so the copywriter uses ${status.fallback}. Set GEMINI_MODEL to one of: ${status.proModels?.join(', ') || 'a current model'}.`;
+    } else if (status) {
+        message = `Writing with ${status.model}.`;
+    }
 
     return (
-        <div className="space-y-8">
-            {/* ─── AI Engine Section ─────────────────────────── */}
-            <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                    <Cpu className="w-5 h-5 text-purple-400" />
-                    <h3 className="text-lg font-semibold text-foreground">AI Engine</h3>
-                </div>
-                <p className="text-sm text-foreground-muted">
-                    Choose the provider and model that power your copy generation. Add your own
-                    API keys below, or rely on the server defaults.
-                </p>
+        <div className={`flex items-start gap-2 p-3 rounded-lg border text-sm ${tone === 'ok'
+            ? 'border-border bg-background-tertiary text-foreground-muted'
+            : 'border-amber-500/30 bg-amber-500/10 text-amber-400'}`}>
+            {tone === 'ok' ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0 text-green-400" /> : <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />}
+            <span>{message}</span>
+        </div>
+    );
+}
 
-                {/* Provider selection — keys live in server env vars, not here */}
-                <div className="space-y-2">
-                    <label className="text-sm font-medium text-foreground">Provider</label>
-                    <div className="flex flex-wrap gap-2">
-                        {(['google', 'anthropic', 'openai'] as AIProvider[]).map(provider => {
-                            const info = AI_PROVIDER_INFO[provider];
-                            const isActive = activeProvider === provider;
-                            return (
-                                <button
-                                    key={provider}
-                                    onClick={() => handleSetActiveProvider(provider)}
-                                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-colors ${
-                                        isActive
-                                            ? 'bg-accent-primary/10 border-accent-primary text-foreground'
-                                            : 'bg-background-tertiary border-border text-foreground-muted hover:text-foreground'
-                                    }`}
-                                >
-                                    <span>{info.emoji}</span>
-                                    {info.label}
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
+export function BrandVoiceSettings({ settings, onChange }: BrandVoiceSettingsProps) {
+    const [killInput, setKillInput] = useState('');
 
-                {/* Your API Keys — secure per-user, via /api/ai/keys */}
-                <ProviderKeyManager />
+    const addKillWord = () => {
+        const word = killInput.trim();
+        setKillInput('');
+        if (!word || settings.killList.length >= LIMITS.killList) return;
+        if (settings.killList.some(w => w.toLowerCase() === word.toLowerCase())) return;
+        onChange({ killList: [...settings.killList, word] });
+    };
 
-                {/* Model Selector — filtered to active provider */}
-                <div className="space-y-2">
-                    <label className="text-sm font-medium text-foreground">
-                        Model
-                    </label>
-                    <select
-                        value={activeModel}
-                        onChange={(e) => onChange({ aiModel: e.target.value })}
-                        className="w-full px-4 py-2.5 bg-background-tertiary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-accent-primary"
-                    >
-                        {availableModels.map(model => (
-                            <option key={model.id} value={model.id}>
-                                {model.displayName} — {model.description}
-                            </option>
-                        ))}
-                    </select>
-                    <p className="text-xs text-foreground-subtle">
-                        Model selection applies to all future generations across the team.
-                    </p>
-                </div>
+    const field = (key: 'brandVoice' | 'targetPersonas', label: string, help: string, placeholder: string) => (
+        <div className="space-y-2">
+            <div className="flex items-center justify-between">
+                <label htmlFor={key} className="text-sm font-medium text-foreground">{label}</label>
+                <span className={`text-xs ${settings[key].length > LIMITS[key] ? 'text-accent-error' : 'text-foreground-muted'}`}>
+                    {settings[key].length} / {LIMITS[key]}
+                </span>
             </div>
+            <textarea
+                id={key}
+                value={settings[key]}
+                onChange={(e) => onChange({ [key]: e.target.value.slice(0, LIMITS[key]) })}
+                placeholder={placeholder}
+                className="w-full h-44 px-4 py-3 bg-background-tertiary border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-subtle focus:outline-none focus:border-accent-primary resize-y"
+            />
+            <p className="text-xs text-foreground-subtle">{help}</p>
+        </div>
+    );
 
-            {/* ─── Divider ────────────────────────────────────── */}
-            <div className="border-t border-border" />
-
-            {/* ─── Brand Voice Section ────────────────────────── */}
+    return (
+        <div className="space-y-6">
             <div>
-                <h3 className="text-lg font-semibold text-foreground mb-1">Brand Voice</h3>
+                <h3 className="text-lg font-semibold text-foreground mb-1 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-purple-400" /> Copywriter
+                </h3>
                 <p className="text-sm text-foreground-muted">
-                    Define your brand&apos;s AI writing style and constraints
+                    Applies to every campaign. Product facts come from each campaign&apos;s Context.
                 </p>
             </div>
 
-            {/* Copywriter Persona */}
+            <ModelStatus />
+
+            {field('brandVoice', 'Brand voice',
+                'How the brand sounds: tone, house rules, words to use or avoid. Describe the brand, not the AI.',
+                'Dry, confident, a little funny. Short sentences. At most one emoji. We say "pack", never "bag"…')}
+
+            {field('targetPersonas', 'Target personas',
+                'Who you sell to. A short paragraph each.',
+                'Weekend adventurers: 28–45, camp and hike, buy gear that lasts…')}
+
             <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-foreground">
-                        Copywriter Persona
-                    </label>
-                    <span className={`text-xs ${settings.copywriterPersona.length > CHAR_LIMITS.copywriterPersona
-                            ? 'text-accent-error'
-                            : 'text-foreground-muted'
-                        }`}>
-                        {settings.copywriterPersona.length} / {CHAR_LIMITS.copywriterPersona}
-                    </span>
-                </div>
-                <textarea
-                    value={settings.copywriterPersona}
-                    onChange={(e) => onChange({ copywriterPersona: e.target.value })}
-                    placeholder="Define the AI's writing persona (e.g., 'You are a direct-response copywriter who writes punchy, benefit-focused Meta ads...')"
-                    className="w-full h-32 px-4 py-3 bg-background-tertiary border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-subtle focus:outline-none focus:border-accent-primary resize-none"
-                />
-                <p className="text-xs text-foreground-subtle">
-                    This is the system prompt that defines how the AI writes. Be specific about tone, style, and approach.
-                </p>
-            </div>
-
-            {/* Brand Knowledge */}
-            <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-foreground">
-                        Brand Knowledge
-                    </label>
-                    <span className={`text-xs ${settings.brandKnowledge.length > CHAR_LIMITS.brandKnowledge
-                            ? 'text-accent-error'
-                            : 'text-foreground-muted'
-                        }`}>
-                        {settings.brandKnowledge.length} / {CHAR_LIMITS.brandKnowledge}
-                    </span>
-                </div>
-                <textarea
-                    value={settings.brandKnowledge}
-                    onChange={(e) => onChange({ brandKnowledge: e.target.value })}
-                    placeholder="Key brand facts, positioning, values, and context that should inform all copy..."
-                    className="w-full h-48 px-4 py-3 bg-background-tertiary border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-subtle focus:outline-none focus:border-accent-primary resize-none"
-                />
-                <p className="text-xs text-foreground-subtle">
-                    Include brand story, unique value props, target market context, and any facts the AI should know.
-                </p>
-            </div>
-
-            {/* Emoji Density */}
-            <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">
-                    Emoji Density
-                </label>
-                <div className="flex gap-3">
-                    {(['none', 'sparse', 'liberal'] as const).map(density => (
-                        <button
-                            key={density}
-                            onClick={() => onChange({ emojiDensity: density })}
-                            className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${settings.emojiDensity === density
-                                    ? 'bg-accent-primary text-white'
-                                    : 'bg-background-tertiary text-foreground-muted hover:text-foreground hover:bg-background-secondary border border-border'
-                                }`}
-                        >
-                            {density === 'none' && '🚫 None'}
-                            {density === 'sparse' && '✨ Sparse'}
-                            {density === 'liberal' && '🎉 Liberal'}
-                        </button>
-                    ))}
-                </div>
-                <p className="text-xs text-foreground-subtle">
-                    Controls how frequently emojis appear in generated copy.
-                </p>
-            </div>
-
-            {/* Kill List */}
-            <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-foreground">
-                        Kill List
-                    </label>
-                    <span className="text-xs text-foreground-muted">
-                        {settings.killList.length} / 50 items
-                    </span>
+                    <label htmlFor="kill-list" className="text-sm font-medium text-foreground">Kill list</label>
+                    <span className="text-xs text-foreground-muted">{settings.killList.length} / {LIMITS.killList}</span>
                 </div>
                 <div className="flex gap-2">
                     <input
+                        id="kill-list"
                         type="text"
-                        placeholder="Add word or phrase to avoid..."
+                        value={killInput}
+                        onChange={(e) => setKillInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') addKillWord(); }}
+                        placeholder="Add a word or phrase to ban…"
+                        disabled={settings.killList.length >= LIMITS.killList}
                         className="flex-1 px-4 py-2 bg-background-tertiary border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-subtle focus:outline-none focus:border-accent-primary"
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                handleKillListAdd((e.target as HTMLInputElement).value);
-                                (e.target as HTMLInputElement).value = '';
-                            }
-                        }}
-                        disabled={settings.killList.length >= 50}
                     />
                     <button
-                        onClick={(e) => {
-                            const input = (e.target as HTMLElement).previousElementSibling as HTMLInputElement;
-                            handleKillListAdd(input.value);
-                            input.value = '';
-                        }}
-                        disabled={settings.killList.length >= 50}
+                        onClick={addKillWord}
+                        disabled={!killInput.trim() || settings.killList.length >= LIMITS.killList}
                         className="px-4 py-2 bg-accent-primary text-white rounded-lg text-sm font-medium hover:bg-accent-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         Add
@@ -343,14 +128,12 @@ export function BrandVoiceSettings({ settings, onChange }: BrandVoiceSettingsPro
                 {settings.killList.length > 0 && (
                     <div className="flex flex-wrap gap-2 mt-3">
                         {settings.killList.map(item => (
-                            <span
-                                key={item}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-accent-error/10 text-accent-error rounded-full text-xs"
-                            >
+                            <span key={item} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-accent-error/10 text-accent-error rounded-full text-xs">
                                 {item}
                                 <button
-                                    onClick={() => handleKillListRemove(item)}
+                                    onClick={() => onChange({ killList: settings.killList.filter(w => w !== item) })}
                                     className="hover:bg-accent-error/20 rounded-full p-0.5 transition-colors"
+                                    aria-label={`Remove ${item}`}
                                 >
                                     <X className="w-3 h-3" />
                                 </button>
@@ -359,7 +142,7 @@ export function BrandVoiceSettings({ settings, onChange }: BrandVoiceSettingsPro
                     </div>
                 )}
                 <p className="text-xs text-foreground-subtle">
-                    Words and phrases the AI should never use. Press Enter to add.
+                    Results containing these words are dropped.
                 </p>
             </div>
         </div>

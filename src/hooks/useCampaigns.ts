@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useEffectEvent, useCallback, useRef } from 'react';
 import { useAuth } from '@/components/AuthContext';
 import {
     listAllCampaigns,
@@ -47,6 +47,26 @@ interface UseCampaignsReturn {
     refreshCampaigns: () => Promise<void>;
 }
 
+// The campaign you last had open, per browser, so a reload reopens it.
+// Storage can be missing or blocked (private windows); then the first tab opens.
+const LAST_CAMPAIGN_KEY = 'mco_last_campaign';
+
+function readLastCampaign(): string | null {
+    try {
+        return window.localStorage.getItem(LAST_CAMPAIGN_KEY);
+    } catch {
+        return null;
+    }
+}
+
+function rememberCampaign(id: string): void {
+    try {
+        window.localStorage.setItem(LAST_CAMPAIGN_KEY, id);
+    } catch {
+        // Not remembered; nothing else depends on it.
+    }
+}
+
 // ============================================
 // Hook
 // ============================================
@@ -68,7 +88,9 @@ export function useCampaigns(): UseCampaignsReturn {
 
     // Save queue refs — prevents overlapping Firestore writes
     const saveInProgressRef = useRef(false);
-    const pendingQueueRef = useRef<Partial<Campaign>>({});
+    // Pending updates per campaign id, so a save that's retried or still in
+    // flight after you switch campaigns lands in the campaign it came from.
+    const pendingQueueRef = useRef<Map<string, Partial<Campaign>>>(new Map());
 
     // Get active campaign (only non-archived)
     const activeCampaigns = campaigns.filter(c => c.archiveStatus !== 'archived');
@@ -91,12 +113,14 @@ export function useCampaigns(): UseCampaignsReturn {
             const loadedCampaigns = await listAllCampaigns();
             setCampaigns(loadedCampaigns);
 
-            // If no active campaign, select the first one (or none if empty)
-            if (!activeCampaignId && loadedCampaigns.length > 0) {
-                setActiveCampaignId(loadedCampaigns[0].id);
-            } else if (activeCampaignId && !loadedCampaigns.find(c => c.id === activeCampaignId)) {
-                // Active campaign was deleted, switch to first
-                setActiveCampaignId(loadedCampaigns.length > 0 ? loadedCampaigns[0].id : null);
+            // Open a campaign that has a tab: the one already open, else the one
+            // you last had open, else the first. Archived campaigns have no tab,
+            // so picking one left the page on "Select a campaign".
+            const open = loadedCampaigns.filter(c => c.archiveStatus !== 'archived');
+            const hasTab = (id: string | null) => !!id && open.some(c => c.id === id);
+            if (!hasTab(activeCampaignId)) {
+                const last = readLastCampaign();
+                setActiveCampaignId(hasTab(last) ? last : open[0]?.id ?? null);
             }
         } catch (err) {
             console.error('Failed to load campaigns:', err);
@@ -106,10 +130,15 @@ export function useCampaigns(): UseCampaignsReturn {
         }
     }, [user, activeCampaignId]);
 
-    // Load on mount and when user changes
+    // Load on mount and when the user changes, not on every campaign switch
+    const loadForUser = useEffectEvent(() => { refreshCampaigns(); });
     useEffect(() => {
-        refreshCampaigns();
+        loadForUser();
     }, [user]);
+
+    useEffect(() => {
+        if (activeCampaignId) rememberCampaign(activeCampaignId);
+    }, [activeCampaignId]);
 
     // Auto-dismiss error messages after 5 seconds
     useEffect(() => {
@@ -224,14 +253,15 @@ export function useCampaigns(): UseCampaignsReturn {
             // If closing active campaign, release lock and switch
             if (id === activeCampaignId) {
                 await releaseCurrentLock();
-                const remaining = campaigns.filter(c => c.id !== id);
+                const remaining = activeCampaigns.filter(c => c.id !== id);
                 setActiveCampaignId(remaining[0]?.id || null);
                 if (remaining[0]) {
                     await tryAcquireLock(remaining[0].id);
                 }
             }
 
-            // Delete from Firestore
+            // Delete from Firestore, and drop any save still queued for it
+            pendingQueueRef.current.delete(id);
             await deleteCampaignInFirestore(id);
 
             // Update local state
@@ -242,7 +272,7 @@ export function useCampaigns(): UseCampaignsReturn {
         } finally {
             setSaving(false);
         }
-    }, [campaigns, activeCampaignId, releaseCurrentLock, tryAcquireLock]);
+    }, [campaigns, activeCampaigns, activeCampaignId, releaseCurrentLock, tryAcquireLock]);
 
     const renameCampaign = useCallback(async (id: string, newName: string) => {
         try {
@@ -268,44 +298,39 @@ export function useCampaigns(): UseCampaignsReturn {
             return;
         }
 
-        // Merge new updates into the pending queue
-        pendingQueueRef.current = { ...pendingQueueRef.current, ...updates };
+        // Merge new updates into this campaign's pending batch
+        const queue = pendingQueueRef.current;
+        queue.set(activeCampaignId, { ...queue.get(activeCampaignId), ...updates });
 
         // If a save is already in flight, the queued updates
         // will be flushed when it completes — don't start another write
         if (saveInProgressRef.current) return;
 
-        // Drain the queue: process batches sequentially until empty
-        while (Object.keys(pendingQueueRef.current).length > 0) {
+        // Drain the queue one campaign's batch at a time. A batch that fails stays
+        // queued for the next change and doesn't hold up the other campaigns.
+        const failed = new Set<string>();
+        for (;;) {
+            const id = [...queue.keys()].find(k => !failed.has(k));
+            if (!id) break;
+            const batch = queue.get(id)!;
+            queue.delete(id);
             saveInProgressRef.current = true;
-            const batch = pendingQueueRef.current;
-            pendingQueueRef.current = {};
 
             try {
                 setSaving(true);
-
-                // Write to Firestore
-                await updateCampaignInFirestore(activeCampaignId, batch);
-
-                // Update local state
+                await updateCampaignInFirestore(id, batch);
                 setCampaigns(prev =>
-                    prev.map(c =>
-                        c.id === activeCampaignId
-                            ? { ...c, ...batch, updatedAt: new Date() }
-                            : c
-                    )
+                    prev.map(c => (c.id === id ? { ...c, ...batch, updatedAt: new Date() } : c))
                 );
             } catch (err) {
-                // Re-queue failed updates so they aren't lost
-                pendingQueueRef.current = { ...batch, ...pendingQueueRef.current };
+                // Re-queue failed updates so they aren't lost; the next change retries them
+                queue.set(id, { ...batch, ...queue.get(id) });
+                failed.add(id);
                 console.error('Failed to update campaign:', err);
                 setError('Save failed — retrying on next change');
-                // Break out to avoid infinite retry loop;
-                // the next user edit will trigger a retry
-                break;
             } finally {
                 saveInProgressRef.current = false;
-                setSaving(Object.keys(pendingQueueRef.current).length > 0);
+                setSaving(queue.size > 0);
             }
         }
     }, [activeCampaignId, isLocked]);

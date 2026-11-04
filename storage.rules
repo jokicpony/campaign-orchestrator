@@ -11,10 +11,10 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // EDIT FOR YOUR TEAM: same allowlist as firestore.rules.
     function isTeamMember() {
       return request.auth != null
         && request.auth.token.email_verified == true
+        // EDIT FOR YOUR TEAM: replace with your domain and/or individual emails.
         && (request.auth.token.email.matches('.*@your-company[.]com$')
             || request.auth.token.email == 'teammate@example.com');
     }

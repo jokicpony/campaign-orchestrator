@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { logger, serializeError } from '@/lib/logger';
+import { isDriveFileId } from '@/lib/server/ids';
 
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 
@@ -40,6 +41,9 @@ export async function GET(request: NextRequest) {
                 { status: 400 }
             );
         }
+        if (!isDriveFileId(fileId)) {
+            return NextResponse.json({ error: 'Invalid fileId' }, { status: 400 });
+        }
 
         // First, get file metadata for content type and size
         const metaResponse = await fetch(
@@ -63,7 +67,12 @@ export async function GET(request: NextRequest) {
         }
 
         const metadata = await metaResponse.json();
-        const contentType = metadata.mimeType || 'video/mp4';
+        // Serve only media types. Anything else (an HTML or SVG file someone
+        // put in Drive) must never render as a page on the app's own origin.
+        const mimeType = typeof metadata.mimeType === 'string' && metadata.mimeType ? metadata.mimeType : 'video/mp4';
+        const contentType = mimeType.startsWith('video/') || /^image\/(jpeg|png|gif|webp)$/.test(mimeType)
+            ? mimeType
+            : 'application/octet-stream';
         const fileSize = parseInt(metadata.size || '0', 10);
 
         // Build headers for the Drive download request
@@ -95,6 +104,7 @@ export async function GET(request: NextRequest) {
             'Content-Type': contentType,
             'Accept-Ranges': 'bytes',
             'Cache-Control': 'private, max-age=3600',
+            'X-Content-Type-Options': 'nosniff',
         };
 
         // For range requests, forward the content-range header

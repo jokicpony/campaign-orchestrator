@@ -17,7 +17,6 @@ import {
     AlertCircle,
     LogOut,
     RefreshCw,
-    Sparkles,
     ChevronDown,
     Star,
 } from 'lucide-react';
@@ -28,7 +27,6 @@ export function ConnectionsSettings() {
     const [metaLoading, setMetaLoading] = useState(true);
     const [metaError, setMetaError] = useState<string | null>(null);
     const [isReconnectingDrive, setIsReconnectingDrive] = useState(false);
-    const [geminiConfigured, setGeminiConfigured] = useState(false);
     const [adAccountDropdownOpen, setAdAccountDropdownOpen] = useState(false);
     const [pageDropdownOpen, setPageDropdownOpen] = useState(false);
     const [defaultAdAccountId, setDefaultAdAccountId] = useState<string | undefined>(undefined);
@@ -44,20 +42,6 @@ export function ConnectionsSettings() {
             }
         }
         loadDefault();
-    }, []);
-
-    // Check if Gemini API key is configured via server API
-    useEffect(() => {
-        async function checkGemini() {
-            try {
-                const response = await fetch('/api/ai/generate');
-                const data = await response.json();
-                setGeminiConfigured(data.configured === true);
-            } catch {
-                setGeminiConfigured(false);
-            }
-        }
-        checkGemini();
     }, []);
 
     // Load Meta connection status
@@ -236,7 +220,7 @@ export function ConnectionsSettings() {
             <div>
                 <h3 className="text-lg font-semibold text-foreground mb-1">Connections</h3>
                 <p className="text-sm text-foreground-muted">
-                    Manage your account and integration connections
+                    Your sign-in, Google Drive and Meta
                 </p>
             </div>
 
@@ -476,42 +460,6 @@ export function ConnectionsSettings() {
                             </div>
                         </div>
                     )}
-                </div>
-
-                {/* AI Engine */}
-                <div className="p-4 rounded-xl border border-border bg-background-secondary">
-                    <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-                                <Sparkles className="w-5 h-5 text-purple-400" />
-                            </div>
-                            <div>
-                                <p className="font-medium text-foreground">AI Engine</p>
-                                <p className="text-sm text-foreground-muted">
-                                    Powers AI Co-Writer copy generation
-                                </p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            {geminiConfigured ? (
-                                <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-accent-success/20 text-accent-success text-xs font-medium">
-                                    <CheckCircle2 className="w-3 h-3" />
-                                    Ready
-                                </span>
-                            ) : (
-                                <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/20 text-amber-400 text-xs font-medium">
-                                    <AlertCircle className="w-3 h-3" />
-                                    No env keys
-                                </span>
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="mt-3 pt-3 border-t border-border/50">
-                        <p className="text-xs text-foreground-muted">
-                            Manage API keys and select your AI provider in Settings → Brand Voice.
-                        </p>
-                    </div>
                 </div>
             </div>
         </div>

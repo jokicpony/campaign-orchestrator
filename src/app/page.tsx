@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Campaign, AdRow } from '@/types';
 import { useAuth } from '@/components/AuthContext';
 import { useCampaigns, useGlobalSettings } from '@/hooks';
@@ -34,7 +34,7 @@ export default function Home() {
   } = useCampaigns();
 
   // Global settings (shared across all campaigns)
-  const { settings: globalSettings, update: updateGlobalSettings, loading: settingsLoading } = useGlobalSettings();
+  const { settings: globalSettings, update: updateGlobalSettings, reload: reloadGlobalSettings, loading: settingsLoading } = useGlobalSettings();
 
   const [mode, setMode] = useState<'build' | 'review'>('build');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -90,28 +90,53 @@ export default function Home() {
     debouncedSave(updates);
   }, [debouncedSave]);
 
-  const handleSelectCampaign = useCallback(async (id: string) => {
-    // Cancel any in-flight debounced save for the OLD campaign
+  // Save edits still waiting on the debounce right now. Call it before
+  // anything changes the active campaign: updateCampaign writes to whichever
+  // campaign is active, so a late save could land on the wrong one.
+  const flushPendingSave = useCallback(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
     }
-    // Flush any pending updates to the old campaign before switching
-    if (pendingUpdatesRef.current && Object.keys(pendingUpdatesRef.current).length > 0) {
-      updateCampaign(pendingUpdatesRef.current);
-    }
+    const pending = pendingUpdatesRef.current;
     pendingUpdatesRef.current = {};
+    if (Object.keys(pending).length > 0) {
+      updateCampaign(pending);
+    }
+  }, [updateCampaign]);
 
+  // Closing or reloading the tab inside the 3 s window would drop the last
+  // edits: save them now and let the browser ask "Leave site?".
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (Object.keys(pendingUpdatesRef.current).length === 0) return;
+      flushPendingSave();
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [flushPendingSave]);
+
+  const handleSelectCampaign = useCallback(async (id: string) => {
+    flushPendingSave();
     await selectCampaign(id);
-  }, [selectCampaign, updateCampaign]);
+  }, [selectCampaign, flushPendingSave]);
 
   const handleAddCampaign = useCallback(async () => {
+    flushPendingSave();
     await addCampaign();
-  }, [addCampaign]);
+  }, [addCampaign, flushPendingSave]);
 
   const handleCloseCampaign = useCallback(async (id: string) => {
+    flushPendingSave();
     await closeCampaign(id);
-  }, [closeCampaign]);
+  }, [closeCampaign, flushPendingSave]);
+
+  const handleArchiveCampaign = useCallback(async (id: string) => {
+    flushPendingSave();
+    await archiveCampaign(id);
+  }, [archiveCampaign, flushPendingSave]);
 
   const handleRenameCampaign = useCallback(async (id: string, newName: string) => {
     await renameCampaign(id, newName);
@@ -119,7 +144,8 @@ export default function Home() {
 
   const handleOpenSettings = useCallback(() => {
     setIsSettingsOpen(true);
-  }, []);
+    reloadGlobalSettings();
+  }, [reloadGlobalSettings]);
 
   // Handle row updates for review mode (status, comments)
   // Uses functional state update to handle rapid consecutive calls correctly
@@ -185,6 +211,10 @@ export default function Home() {
 
   // Use local state for display (more responsive), fall back to Firestore state
   const displayCampaign = localCampaignState || activeCampaign;
+  // For the copywriter's "Copy from campaign"
+  const otherCampaigns = campaigns
+    .filter(c => c.id !== displayCampaign?.id)
+    .map(c => ({ id: c.id, name: c.name, brief: c.brief }));
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -212,14 +242,13 @@ export default function Home() {
         onSelectCampaign={handleSelectCampaign}
         onAddCampaign={handleAddCampaign}
         onCloseCampaign={handleCloseCampaign}
-        onArchiveCampaign={archiveCampaign}
+        onArchiveCampaign={handleArchiveCampaign}
         onRenameCampaign={handleRenameCampaign}
         onReorderCampaigns={reorderCampaigns}
         mode={mode}
         onToggleMode={() => setMode(mode === 'build' ? 'review' : 'build')}
         onOpenSettings={handleOpenSettings}
         saving={saving}
-      // TODO: Re-add undo/redo with local state tracking if needed
       />
 
       {/* Main Content */}
@@ -240,7 +269,7 @@ export default function Home() {
             campaign={displayCampaign}
             onUpdateCampaign={handleUpdateCampaign}
             globalSettings={globalSettings}
-            onUpdateGlobalSettings={updateGlobalSettings}
+            otherCampaigns={otherCampaigns}
           />
         ) : mode === 'review' && displayCampaign ? (
           <ReviewMode

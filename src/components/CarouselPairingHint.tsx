@@ -14,9 +14,7 @@ import { Info } from 'lucide-react';
  */
 
 export const CAROUSEL_PAIRING_HINT =
-    'Cards pair by position: Card 1 = Asset 1 + Headline 1, Card 2 = Asset 2 + Headline 2, and so on. ' +
-    'Primary Text 1 is the single message shown above all cards. 2–10 cards per carousel — ' +
-    'headline slots grow to match your cards beyond 5.';
+    'Card N = Asset N + Headline N. One primary text shows above all cards. 2–10 cards.';
 
 export function CarouselPairingHint({ className = '' }: { className?: string }) {
     const triggerRef = useRef<HTMLSpanElement>(null);

@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
+import { isMetaId } from '@/lib/server/ids';
 import { requireMetaToken } from '@/lib/server/metaAuth';
 import { logger, serializeError, serializeMetaError } from '@/lib/logger';
 
@@ -31,9 +32,9 @@ export async function POST(request: NextRequest) {
         } = body;
 
         // Validate required fields
-        if (!adAccountId) {
+        if (!isMetaId(adAccountId)) {
             return NextResponse.json(
-                { error: 'adAccountId is required' },
+                { error: 'A valid adAccountId is required' },
                 { status: 400 }
             );
         }

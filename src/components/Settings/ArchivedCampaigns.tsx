@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Archive, RotateCcw, Trash2, AlertTriangle } from 'lucide-react';
 import { Campaign } from '@/types';
 
@@ -18,6 +18,18 @@ export function ArchivedCampaigns({
     saving = false
 }: ArchivedCampaignsProps) {
     const [pendingDelete, setPendingDelete] = useState<Campaign | null>(null);
+
+    // Escape cancels the delete question first, before it can close Settings.
+    useEffect(() => {
+        if (!pendingDelete) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            setPendingDelete(null);
+        };
+        window.addEventListener('keydown', onKeyDown, true);
+        return () => window.removeEventListener('keydown', onKeyDown, true);
+    }, [pendingDelete]);
 
     // Calculate published count for a campaign
     const getPublishedCount = (campaign: Campaign) => {
@@ -40,7 +52,7 @@ export function ArchivedCampaigns({
             <div>
                 <h3 className="text-lg font-semibold text-foreground mb-1">Archived Campaigns</h3>
                 <p className="text-sm text-foreground-muted">
-                    Campaigns you&apos;ve archived are stored here. Restore them to bring them back to your workspace, or delete them permanently.
+                    Restore a campaign to bring back its tab, or delete it for good.
                 </p>
             </div>
 
@@ -50,9 +62,6 @@ export function ArchivedCampaigns({
                         <Archive className="w-8 h-8 text-foreground-muted" />
                     </div>
                     <p className="text-foreground-muted font-medium">No archived campaigns</p>
-                    <p className="text-sm text-foreground-subtle mt-1">
-                        Archived campaigns will appear here
-                    </p>
                 </div>
             ) : (
                 <div className="space-y-3">

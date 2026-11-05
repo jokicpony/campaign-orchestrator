@@ -164,7 +164,7 @@ export function NamingSettings({ settings, onChange }: NamingSettingsProps) {
             <div>
                 <h3 className="text-lg font-semibold text-foreground mb-1">Naming Conventions</h3>
                 <p className="text-sm text-foreground-muted">
-                    Create templates for structured ad names sent to Meta API
+                    Templates for ad names
                 </p>
             </div>
 

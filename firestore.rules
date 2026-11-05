@@ -6,10 +6,11 @@ rules_version = '2';
 // Data model this protects:
 //   users/{uid}                      — profile
 //   users/{uid}/integrations/meta    — Meta connection METADATA (no token)
-//   users/{uid}/settings/global      — per-user settings (may hold AI keys)
+//   users/{uid}/settings/global      — unused (all settings are team-wide now)
 //   campaigns/{campaignId}           — shared team workspace
 //   settings/global                  — shared org-wide settings
 //   serverSecrets/{uid}              — Meta access token, backend-only (denied below)
+//   aiUsage/{day_model}              — AI usage totals, backend-only (catch-all deny)
 //
 // Keep the team allowlist below in sync with the AUTHORIZED_EMAILS /
 // AUTHORIZED_EMAIL_DOMAINS env vars used by the API routes.
@@ -34,8 +35,8 @@ service cloud.firestore {
       return isTeamMember() && request.auth.uid == uid;
     }
 
-    // Per-user data: profile, integrations (Meta token!), personal settings.
-    // Owner-only — teammates must not be able to read each other's tokens.
+    // Per-user data: profile and Meta connection metadata. Owner-only —
+    // teammates must not read each other's data.
     match /users/{uid} {
       allow read, write: if isOwner(uid);
 

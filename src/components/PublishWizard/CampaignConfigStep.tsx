@@ -1,12 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { AlertTriangle, Info, Lock, ChevronDown, Sparkles, Zap, Calendar, X } from 'lucide-react';
+import { Info, Lock, ChevronDown, Sparkles, Zap, Calendar, X } from 'lucide-react';
 import { WizardSettings, CampaignObjective, SpecialAdCategory, OptimizationGoal, ConversionEvent, CreativeEnhancements, BudgetLevel } from './index';
-import { AdRow } from '@/types';
-
-// Objectives supported by Flexible Ads (from Meta docs)
-const FLEXIBLE_AD_OBJECTIVES: CampaignObjective[] = ['OUTCOME_SALES', 'OUTCOME_APP_PROMOTION'];
 
 // Enhancement toggles — surfaced in UI for per-publish control
 const ENHANCEMENT_TOGGLES: Array<{ key: keyof CreativeEnhancements; label: string; description: string }> = [
@@ -31,7 +27,6 @@ const ENHANCEMENT_TOGGLES: Array<{ key: keyof CreativeEnhancements; label: strin
 interface CampaignConfigStepProps {
     settings: WizardSettings;
     onUpdate: (updates: Partial<WizardSettings>) => void;
-    selectedAds: AdRow[]; // To check if any ads are flexible
 }
 
 // Objectives with their corresponding optimization goals
@@ -107,7 +102,7 @@ const CONVERSION_EVENTS: { id: ConversionEvent; label: string; description: stri
     { id: 'OTHER', label: 'Other', description: 'Other conversion event' },
 ];
 
-export function CampaignConfigStep({ settings, onUpdate, selectedAds }: CampaignConfigStepProps) {
+export function CampaignConfigStep({ settings, onUpdate }: CampaignConfigStepProps) {
     const isASC = settings.campaignType === 'ASC';
     const isExisting = settings.targetType === 'existing';
 
@@ -116,10 +111,6 @@ export function CampaignConfigStep({ settings, onUpdate, selectedAds }: Campaign
     const [minScheduleDateTime] = useState(
         () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
     );
-
-    // Check if any selected ad is flexible - if so, restrict objectives
-    const hasFlexibleAds = selectedAds.some(ad => ad.adType === 'flexible');
-    const allowedObjectives = hasFlexibleAds ? FLEXIBLE_AD_OBJECTIVES : OBJECTIVES.map(o => o.id);
 
     const toggleSpecialAdCategory = (category: SpecialAdCategory) => {
         const current = settings.specialAdCategories;
@@ -166,20 +157,6 @@ export function CampaignConfigStep({ settings, onUpdate, selectedAds }: Campaign
             {/* New Campaign Configuration */}
             {!isExisting && (
                 <>
-                    {/* Flexible Ad Objective Warning */}
-                    {hasFlexibleAds && !isASC && (
-                        <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
-                            <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                            <div>
-                                <p className="font-medium text-amber-200">Flexible Ad Objective Restrictions</p>
-                                <p className="text-sm text-amber-300/80 mt-1">
-                                    Flexible ads only support <strong>Sales</strong> and <strong>App Promotion</strong> objectives.
-                                    Other objectives are disabled for this batch.
-                                </p>
-                            </div>
-                        </div>
-                    )}
-
                     {/* ASC Warning */}
                     {isASC && (
                         <div className="flex items-start gap-3 p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/30">
@@ -230,17 +207,13 @@ export function CampaignConfigStep({ settings, onUpdate, selectedAds }: Campaign
                             </label>
                             <div className="grid grid-cols-5 gap-2">
                                 {OBJECTIVES.map((obj) => {
-                                    const isDisabled = !allowedObjectives.includes(obj.id);
                                     return (
                                         <button
                                             key={obj.id}
-                                            onClick={() => !isDisabled && handleObjectiveChange(obj.id)}
-                                            disabled={isDisabled}
+                                            onClick={() => handleObjectiveChange(obj.id)}
                                             className={`p-3 rounded-lg border text-center transition-all ${settings.objective === obj.id
                                                 ? 'border-cyan-500 bg-cyan-500/10'
-                                                : isDisabled
-                                                    ? 'border-border bg-background-tertiary opacity-40 cursor-not-allowed'
-                                                    : 'border-border hover:border-border-hover bg-background-tertiary'
+                                                : 'border-border hover:border-border-hover bg-background-tertiary'
                                                 }`}
                                         >
                                             <span className={`block font-medium text-sm ${settings.objective === obj.id ? 'text-cyan-500' : 'text-foreground'
@@ -341,11 +314,6 @@ export function CampaignConfigStep({ settings, onUpdate, selectedAds }: Campaign
                             </button>
                         ))}
                     </div>
-                    <p className="mt-1 text-xs text-foreground-muted">
-                        {settings.budgetLevel === 'campaign'
-                            ? 'Meta automatically distributes budget across ad sets for best performance'
-                            : 'Each ad set manages its own daily budget independently'}
-                    </p>
                 </div>
             )}
 
@@ -406,7 +374,7 @@ export function CampaignConfigStep({ settings, onUpdate, selectedAds }: Campaign
                     <div className="flex items-start gap-2 mb-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/30">
                         <Info className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
                         <p className="text-xs text-blue-300">
-                            Select if your ads relate to credit, employment, housing, or social/political issues. Required for legal compliance.
+                            Required if your ads are about credit, employment, housing or politics.
                         </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -476,7 +444,7 @@ export function CampaignConfigStep({ settings, onUpdate, selectedAds }: Campaign
                         className="mt-3 w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground focus:outline-none focus:border-cyan-500 [color-scheme:dark]"
                     />
                     <p className="mt-1.5 text-xs text-foreground-muted">
-                        Campaign publishes paused — this date is when delivery begins once activated.
+                        Publishes paused; delivery starts on this date once you turn it on.
                     </p>
                 </div>
             )}

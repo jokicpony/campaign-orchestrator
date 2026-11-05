@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FolderOpen, Loader2, RefreshCw, AlertCircle, Check, Link2, HardDrive, Search, Film, Image as ImageIcon, Play } from 'lucide-react';
 import { useAuth } from '@/components/AuthContext';
@@ -61,15 +61,14 @@ export function AssetLibrary({
     const [error, setError] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
 
-    // Sync input with external url
-    useEffect(() => {
-        if (driveFolderUrl && driveFolderUrl !== inputValue) {
-            setInputValue(driveFolderUrl);
-        }
-    }, [driveFolderUrl]);
+    // Follow the campaign's saved folder when it changes (adjusting state
+    // during render rather than in an effect, per react.dev)
+    const [syncedFolderUrl, setSyncedFolderUrl] = useState(driveFolderUrl);
+    if (driveFolderUrl !== syncedFolderUrl) {
+        setSyncedFolderUrl(driveFolderUrl);
+        if (driveFolderUrl) setInputValue(driveFolderUrl);
+    }
 
-    // Track if we were waiting for reconnection
-    const [pendingLoad, setPendingLoad] = useState(false);
 
     const handleLoadFolder = useCallback(async () => {
         const extractedId = extractFolderId(inputValue);
@@ -80,8 +79,7 @@ export function AssetLibrary({
         }
 
         if (!driveAccessToken) {
-            // Don't show error - mark as pending and let user connect
-            setPendingLoad(true);
+            // No error: once the user connects Drive, the effect below loads it
             return;
         }
 
@@ -123,20 +121,22 @@ export function AssetLibrary({
         }
     }, [reconnectDrive]);
 
-    // Auto-load when token becomes available and we have a pending load or pre-populated URL
+    // Auto-load when the token becomes available and there's a folder to load
+    // (a pending load, or the campaign's saved folder). Only once per folder
+    // and token: an empty or missing folder used to reload forever, because
+    // each failed load flipped `loading` back and re-ran this effect.
+    const autoLoadedFor = useRef<string | null>(null);
     useEffect(() => {
-        if (driveAccessToken && inputValue.trim() && !loading && assets.length === 0) {
-            // Clear pending and auto-load
-            if (pendingLoad) {
-                setPendingLoad(false);
-            }
-            // Small delay to ensure token is fully available
-            const timer = setTimeout(() => {
-                handleLoadFolder();
-            }, 300);
-            return () => clearTimeout(timer);
-        }
-    }, [driveAccessToken, inputValue, loading, assets.length, pendingLoad, handleLoadFolder]);
+        if (!driveAccessToken || !inputValue.trim() || loading || assets.length > 0) return;
+        const key = `${driveAccessToken}|${inputValue.trim()}`;
+        if (autoLoadedFor.current === key) return;
+        // Small delay to ensure token is fully available (and to let typing settle)
+        const timer = setTimeout(() => {
+            autoLoadedFor.current = key;
+            handleLoadFolder();
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [driveAccessToken, inputValue, loading, assets.length, handleLoadFolder]);
 
     // Filter assets by search query
     const filteredAssets = assets.filter(asset =>

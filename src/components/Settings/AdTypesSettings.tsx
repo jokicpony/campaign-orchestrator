@@ -33,7 +33,7 @@ export function AdTypesSettings({ settings, onChange }: AdTypesSettingsProps) {
                 <div>
                     <h3 className="text-sm font-semibold text-foreground">Ad Types</h3>
                     <p className="text-xs text-foreground-muted mt-0.5">
-                        Configure naming aliases for standardized ad types
+                        Short names for each ad type, used in ad names
                     </p>
                 </div>
                 <button

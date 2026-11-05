@@ -695,18 +695,6 @@ export async function getTopPerformers(
     return results;
 }
 
-/**
- * Check if a token is still valid
- */
-export async function validateToken(accessToken: string): Promise<boolean> {
-    try {
-        await getUserInfo(accessToken);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
 // ============================================================================
 // PUBLISHING API FUNCTIONS (Phase 7: Meta Direct Publish)
 // ============================================================================

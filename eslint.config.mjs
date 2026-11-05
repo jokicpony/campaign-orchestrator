@@ -11,6 +11,10 @@ const eslintConfig = defineConfig([
     rules: {
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/immutability": "warn",
+      // Every <img> here is a Drive thumbnail, a Storage cache URL, a blob:
+      // preview or the logo. next/image can't take blob: URLs and would bill
+      // Vercel image optimization for the rest, so plain <img> is deliberate.
+      "@next/next/no-img-element": "off",
     },
   },
   // Override default ignores of eslint-config-next.

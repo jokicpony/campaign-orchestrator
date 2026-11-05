@@ -120,7 +120,7 @@ export function AdNamer({ globalSettings }: AdNamerProps) {
                         <div className="flex flex-col">
                             <h3 className="font-semibold text-[var(--text-primary)]">Ad Namer</h3>
                             <span className="text-[10px] text-[var(--text-muted)]">
-                                Quick name generator for ads produced outside of this tool. Uses standardized templates.
+                                Names for ads made outside this tool
                             </span>
                         </div>
                         <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 text-[9px] font-semibold uppercase tracking-wide">

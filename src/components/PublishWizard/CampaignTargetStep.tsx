@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react';
 import { authedFetch } from '@/lib/api/authedFetch';
 import { Building2, Plus, Loader2, Activity, Tag } from 'lucide-react';
 import { WizardSettings, CampaignType, deriveAdSetDefaults } from './index';
@@ -37,22 +37,50 @@ interface MetaPixel {
     lastFiredTime?: string;
 }
 
+/** A list loaded from Meta for one key (ad account or campaign), or why it failed. */
+interface Loaded<T> {
+    key: string;
+    items: T[];
+    error?: string;
+}
+
+/** POST to one of the Meta list routes; never throws. */
+async function fetchMetaList<T>(path: string, body: object, field: string): Promise<{ items: T[]; error?: string }> {
+    try {
+        const res = await authedFetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) return { items: data[field] || [] };
+        console.error(`[${path}] API returned error:`, {
+            status: res.status,
+            error: data.error,
+            errorCode: data.errorCode,
+            errorType: data.errorType,
+            fbtraceId: data.fbtraceId,
+        });
+        return { items: [], error: data.error || `Request failed (${res.status})` };
+    } catch (err) {
+        console.error(`[${path}] Network error:`, err);
+        return { items: [], error: 'Network error. Check your connection.' };
+    }
+}
+
 const CAMPAIGN_TYPES: { id: CampaignType; label: string; description: string }[] = [
     { id: 'STANDARD', label: 'Standard', description: 'Full targeting control' },
     { id: 'ASC', label: 'Advantage+ Shopping', description: 'AI-optimized for sales' },
 ];
 
 export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalSettings }: CampaignTargetStepProps) {
-    const [campaigns, setCampaigns] = useState<MetaCampaign[]>([]);
-    const [adSets, setAdSets] = useState<MetaAdSet[]>([]);
-    const [pixels, setPixels] = useState<MetaPixel[]>([]);
-    const [isLoadingCampaigns, setIsLoadingCampaigns] = useState(false);
-    const [isLoadingAdSets, setIsLoadingAdSets] = useState(false);
-    const [isLoadingPixels, setIsLoadingPixels] = useState(false);
+    const [campaignsLoad, setCampaignsLoad] = useState<Loaded<MetaCampaign> | null>(null);
+    const [adSetsLoad, setAdSetsLoad] = useState<Loaded<MetaAdSet> | null>(null);
+    const [pixelsLoad, setPixelsLoad] = useState<Loaded<MetaPixel> | null>(null);
     const [campaignSearch, setCampaignSearch] = useState('');
     const [adSetSearch, setAdSetSearch] = useState('');
-    const [error, setError] = useState<string | null>(null);
     const adSetSectionRef = useRef<HTMLDivElement>(null);
+    const accountId = metaConnection?.selectedAdAccountId || '';
 
     // Campaign naming state
     const campaignTemplates = globalSettings.campaignNamingTemplates || [];
@@ -83,18 +111,29 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
     }, [activeCampaignTemplate, campaignTokenValues, settings.campaignType, campaignTypes]);
 
     // Push assembled name to wizard settings
+    const pushCampaignName = useEffectEvent((name: string) => onUpdate({ campaignName: name }));
     useEffect(() => {
-        if (hasTemplates && assembledCampaignName) {
-            onUpdate({ campaignName: assembledCampaignName });
-        }
+        if (hasTemplates && assembledCampaignName) pushCampaignName(assembledCampaignName);
     }, [assembledCampaignName, hasTemplates]);
+
+    // Meta lists are keyed by what they were loaded for, so loading is derived
+    // (nothing set synchronously in an effect) and a late answer for an old
+    // campaign or account is never shown. A failed load retries when its
+    // section is shown again.
+    const campaignsFor = campaignsLoad?.key === accountId ? campaignsLoad : null;
+    const campaigns = campaignsFor?.items ?? [];
+    const wantCampaigns = settings.targetType === 'existing' && !!accountId;
+    const isLoadingCampaigns = wantCampaigns && !campaignsFor;
+    const campaignsReady = !!campaignsFor && !campaignsFor.error;
 
     // Load campaigns when switching to existing mode
     useEffect(() => {
-        if (settings.targetType === 'existing' && campaigns.length === 0 && metaConnection) {
-            loadCampaigns();
-        }
-    }, [settings.targetType, metaConnection]);
+        if (!wantCampaigns || campaignsReady) return;
+        let cancelled = false;
+        fetchMetaList<MetaCampaign>('/api/meta/campaigns', { adAccountId: accountId }, 'campaigns')
+            .then(result => { if (!cancelled) setCampaignsLoad({ key: accountId, ...result }); });
+        return () => { cancelled = true; };
+    }, [wantCampaigns, campaignsReady, accountId]);
 
     // Ad set mode for existing campaigns: reuse one or create a new one
     const adSetMode = settings.adSetMode || 'existing';
@@ -113,123 +152,47 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
         settings.adSetMode === 'new' &&
         deriveAdSetDefaults(settings.existingCampaignObjective).needsPixel;
 
+    const pixelsFor = pixelsLoad?.key === accountId ? pixelsLoad : null;
+    const pixels = pixelsFor?.items ?? [];
+    const pixelError = pixelsFor?.error ? `Couldn't load pixels: ${pixelsFor.error}` : null;
+    const wantPixels = (settings.targetType === 'new' || needsPixelForNewAdSet) && !!accountId;
+    const isLoadingPixels = wantPixels && !pixelsFor;
+    const pixelsReady = !!pixelsFor && !pixelsFor.error;
+
+    // Pick the pixel when the account has exactly one
+    const autoSelectPixel = useEffectEvent((loaded: MetaPixel[]) => {
+        if (loaded.length === 1 && !settings.pixelId) onUpdate({ pixelId: loaded[0].id });
+    });
+
     useEffect(() => {
-        if ((settings.targetType === 'new' || needsPixelForNewAdSet) && pixels.length === 0 && metaConnection) {
-            loadPixels();
-        }
-    }, [settings.targetType, needsPixelForNewAdSet, metaConnection]);
+        if (!wantPixels || pixelsReady) return;
+        let cancelled = false;
+        fetchMetaList<MetaPixel>('/api/meta/pixels', { adAccountId: accountId }, 'pixels')
+            .then(result => {
+                if (cancelled) return;
+                setPixelsLoad({ key: accountId, ...result });
+                autoSelectPixel(result.items);
+            });
+        return () => { cancelled = true; };
+    }, [wantPixels, pixelsReady, accountId]);
 
     // Load ad sets when campaign is selected
+    const campaignId = metaConnection ? settings.existingCampaignId || '' : '';
+    const adSetsFor = campaignId && adSetsLoad?.key === campaignId ? adSetsLoad : null;
+    const adSets = adSetsFor?.items ?? [];
+    const isLoadingAdSets = !!campaignId && !adSetsFor;
+
     useEffect(() => {
-        if (settings.existingCampaignId && metaConnection) {
-            loadAdSets(settings.existingCampaignId);
-            // Auto-scroll to ad set section after a brief delay for render
-            setTimeout(() => {
-                adSetSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }, 100);
-        }
-    }, [settings.existingCampaignId, metaConnection]);
-
-    const loadPixels = async () => {
-        if (!metaConnection?.selectedAdAccountId) {
-            console.warn('[Pixels] Skipped: no ad account selected');
-            return;
-        }
-
-        setIsLoadingPixels(true);
-        setError(null);
-        try {
-            const res = await authedFetch('/api/meta/pixels', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    adAccountId: metaConnection.selectedAdAccountId,
-                }),
-            });
-            const data = await res.json();
-
-            if (res.ok) {
-                const loadedPixels = data.pixels || [];
-                setPixels(loadedPixels);
-                console.log(`[Pixels] Loaded ${loadedPixels.length} pixel(s)`);
-                // Auto-select if only one pixel
-                if (loadedPixels.length === 1 && !settings.pixelId) {
-                    onUpdate({ pixelId: loadedPixels[0].id });
-                }
-            } else {
-                console.error('[Pixels] API returned error:', {
-                    status: res.status,
-                    error: data.error,
-                    errorCode: data.errorCode,
-                    errorType: data.errorType,
-                    fbtraceId: data.fbtraceId,
-                });
-                setError(`Pixel load failed: ${data.error || 'Unknown error'} (code: ${data.errorCode || 'none'})`);
-            }
-        } catch (err) {
-            console.error('[Pixels] Network/fetch error:', err);
-            setError('Failed to load pixels — check your connection');
-        } finally {
-            setIsLoadingPixels(false);
-        }
-    };
-
-    const loadCampaigns = async () => {
-        if (!metaConnection?.selectedAdAccountId) {
-            setError('Meta not connected or no ad account selected');
-            return;
-        }
-
-        setIsLoadingCampaigns(true);
-        setError(null);
-        try {
-            const res = await authedFetch('/api/meta/campaigns', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    adAccountId: metaConnection.selectedAdAccountId,
-                }),
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setCampaigns(data.campaigns || []);
-            } else {
-                const data = await res.json();
-                setError(data.error || 'Failed to load campaigns');
-            }
-        } catch (err) {
-            console.error('Failed to load campaigns:', err);
-            setError('Failed to load campaigns');
-        } finally {
-            setIsLoadingCampaigns(false);
-        }
-    };
-
-    const loadAdSets = async (campaignId: string) => {
-        if (!metaConnection) {
-            return;
-        }
-
-        setIsLoadingAdSets(true);
-        setAdSets([]);
-        try {
-            const res = await authedFetch('/api/meta/adsets', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    campaignId,
-                }),
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setAdSets(data.adSets || []);
-            }
-        } catch (err) {
-            console.error('Failed to load ad sets:', err);
-        } finally {
-            setIsLoadingAdSets(false);
-        }
-    };
+        if (!campaignId) return;
+        let cancelled = false;
+        fetchMetaList<MetaAdSet>('/api/meta/adsets', { campaignId }, 'adSets')
+            .then(result => { if (!cancelled) setAdSetsLoad({ key: campaignId, ...result }); });
+        // Scroll to the ad set section once it has rendered
+        const timer = setTimeout(() => {
+            adSetSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+        return () => { cancelled = true; clearTimeout(timer); };
+    }, [campaignId]);
 
     const filteredCampaigns = campaigns.filter(c =>
         c.name.toLowerCase().includes(campaignSearch.toLowerCase())
@@ -294,7 +257,7 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
                             <span className="text-sm font-semibold text-foreground">Campaign Name</span>
                         </div>
                         <p className="text-xs text-foreground-muted mb-4">
-                            {hasTemplates ? 'Build your campaign name from your naming template' : 'Enter a name for your new campaign'}
+                            {hasTemplates ? 'Built from your naming template' : 'Name the new campaign'}
                         </p>
 
                         {hasTemplates ? (
@@ -454,11 +417,11 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
                                 ) : pixels.length === 0 ? (
                                     <div className="py-2 space-y-1">
                                         <p className="text-sm text-amber-400">
-                                            {error || 'No pixels found. Make sure you have a Meta Pixel configured for your ad account.'}
+                                            {pixelError || 'No pixels found for this ad account.'}
                                         </p>
-                                        {error && (
+                                        {pixelError && (
                                             <p className="text-xs text-foreground-muted">
-                                                Try disconnecting and reconnecting Meta in Settings → Connections
+                                                Try reconnecting Meta in Settings → Connections.
                                             </p>
                                         )}
                                     </div>
@@ -532,8 +495,8 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
                         ) : (
                             <div className="max-h-40 overflow-y-auto rounded-lg border border-border bg-background">
                                 {filteredCampaigns.length === 0 ? (
-                                    <p className="p-4 text-sm text-foreground-muted text-center">
-                                        No campaigns found
+                                    <p className={`p-4 text-sm text-center ${campaignsFor?.error ? 'text-amber-400' : 'text-foreground-muted'}`}>
+                                        {campaignsFor?.error ? `Couldn't load campaigns: ${campaignsFor.error}` : 'No campaigns found'}
                                     </p>
                                 ) : (
                                     filteredCampaigns.map((campaign) => (
@@ -619,8 +582,8 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
                                     ) : (
                                         <div className="max-h-40 overflow-y-auto rounded-lg border border-border bg-background">
                                             {filteredAdSets.length === 0 ? (
-                                                <p className="p-4 text-sm text-foreground-muted text-center">
-                                                    No ad sets found
+                                                <p className={`p-4 text-sm text-center ${adSetsFor?.error ? 'text-amber-400' : 'text-foreground-muted'}`}>
+                                                    {adSetsFor?.error ? `Couldn't load ad sets: ${adSetsFor.error}` : 'No ad sets found'}
                                                 </p>
                                             ) : (
                                                 filteredAdSets.map((adSet) => (
@@ -668,8 +631,7 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
                                         <div className="flex items-start gap-2 p-3 rounded-lg bg-background border border-border">
                                             <Activity className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
                                             <p className="text-xs text-foreground-muted">
-                                                This campaign uses <span className="text-foreground font-medium">Campaign Budget Optimization</span> —
-                                                Meta distributes budget across ad sets automatically, so the new ad set doesn&apos;t need its own.
+                                                This campaign uses <span className="text-foreground font-medium">Campaign Budget Optimization</span>, so the ad set needs no budget.
                                             </p>
                                         </div>
                                     ) : (
@@ -702,7 +664,7 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
                                                 </div>
                                             ) : pixels.length === 0 ? (
                                                 <p className="text-sm text-amber-400 py-1">
-                                                    {error || 'No pixels found for this ad account.'}
+                                                    {pixelError || 'No pixels found for this ad account.'}
                                                 </p>
                                             ) : (
                                                 <select
@@ -722,9 +684,7 @@ export function CampaignTargetStep({ settings, onUpdate, metaConnection, globalS
                                     )}
 
                                     <p className="text-xs text-foreground-subtle">
-                                        Targeting and optimization match this campaign&apos;s objective
-                                        ({settings.existingCampaignObjective?.replace('OUTCOME_', '').toLowerCase() || 'standard'}).
-                                        The ad set is created paused.
+                                        Matches the campaign&apos;s objective ({settings.existingCampaignObjective?.replace('OUTCOME_', '').toLowerCase() || 'standard'}). Created paused.
                                     </p>
                                 </div>
                             )}

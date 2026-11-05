@@ -4,10 +4,13 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, MessageSquare, AlertCircle, ChevronLeft, ChevronRight, Film, Image as ImageIcon, Send, X, Link2, Copy, Check, Grid3X3, ChevronDown, Upload, Square, CheckSquare, CloudOff } from 'lucide-react';
 import { Campaign, AdRow, AdComment, DEFAULT_AD_TYPES, mergeAdTypes, AD_TYPE_COLORS } from '@/types';
+import { isSingleAdType } from '@/types/ad-types';
 import { useAuth } from '@/components/AuthContext';
 import { CarouselPairingHint } from '@/components/CarouselPairingHint';
 import { MediaStacks } from '@/components/MediaStacks';
 import { shapeLabel } from '@/lib/meta/multiMedia';
+import { COPY_TYPE } from '@/components/copyType';
+import { AdPreview } from './AdPreview';
 import { PublishWizard, WizardSettings, AdPublishResult } from '@/components/PublishWizard';
 
 interface ReviewModeProps {
@@ -77,6 +80,23 @@ export function ReviewMode({ campaign, onUpdateRow, globalSettings }: ReviewMode
     const selectAllReviewed = useCallback(() => {
         setSelectedRowIds(new Set(reviewedRows.map(r => r.id)));
     }, [reviewedRows]);
+
+    // The header's Publish: every reviewed ad not yet sent to Meta, straight into the wizard.
+    const readyRows = useMemo(() => reviewedRows.filter(r => !r.lastPublishedAt), [reviewedRows]);
+    // That selection is the wizard's alone: it's cleared again when the wizard closes.
+    const [publishingFromHeader, setPublishingFromHeader] = useState(false);
+    const publishReady = useCallback(() => {
+        setSelectedRowIds(new Set(readyRows.map(r => r.id)));
+        setPublishingFromHeader(true);
+        setShowPublishWizard(true);
+    }, [readyRows]);
+    const closePublishWizard = useCallback(() => {
+        setShowPublishWizard(false);
+        if (publishingFromHeader) {
+            setSelectedRowIds(new Set());
+            setPublishingFromHeader(false);
+        }
+    }, [publishingFromHeader]);
 
     const clearSelection = useCallback(() => {
         setSelectedRowIds(new Set());
@@ -163,7 +183,7 @@ export function ReviewMode({ campaign, onUpdateRow, globalSettings }: ReviewMode
                 <div className="text-center">
                     <p className="text-foreground-muted text-lg">No ads to review</p>
                     <p className="text-foreground-subtle text-sm mt-2">
-                        Switch to Build Mode to create ads
+                        Add ads in Build first
                     </p>
                 </div>
             </div>
@@ -204,6 +224,16 @@ export function ReviewMode({ campaign, onUpdateRow, globalSettings }: ReviewMode
                     <span className="text-sm font-medium text-foreground">
                         Ad {currentIndex + 1} of {totalRows}
                     </span>
+                    {readyRows.length > 0 && (
+                        <button
+                            onClick={publishReady}
+                            title="Publish the reviewed ads that haven't been sent to Meta yet. They go in paused."
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 transition-colors"
+                        >
+                            <Upload className="w-4 h-4" />
+                            Publish {readyRows.length} reviewed
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -390,7 +420,7 @@ export function ReviewMode({ campaign, onUpdateRow, globalSettings }: ReviewMode
                 </button>
 
                 {/* Cards Container */}
-                <div className="flex items-center justify-center w-full max-w-4xl relative">
+                <div className="flex items-center justify-center w-full max-w-4xl xl:max-w-6xl relative">
                     <AnimatePresence mode="wait">
                         {/* Previous card (blurred peek) */}
                         {currentIndex > 0 && (
@@ -411,7 +441,7 @@ export function ReviewMode({ campaign, onUpdateRow, globalSettings }: ReviewMode
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.9 }}
                             transition={{ duration: 0.3 }}
-                            className="w-full max-w-2xl"
+                            className="w-full max-w-2xl xl:max-w-5xl"
                         >
                             <ReviewCard
                                 row={currentRow}
@@ -475,7 +505,7 @@ export function ReviewMode({ campaign, onUpdateRow, globalSettings }: ReviewMode
 
             {/* Selection Action Bar */}
             <AnimatePresence>
-                {selectedRowIds.size > 0 && (
+                {selectedRowIds.size > 0 && !publishingFromHeader && (
                     <motion.div
                         initial={{ y: 100, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
@@ -505,7 +535,7 @@ export function ReviewMode({ campaign, onUpdateRow, globalSettings }: ReviewMode
             {/* Publish Wizard Modal */}
             <PublishWizard
                 isOpen={showPublishWizard}
-                onClose={() => setShowPublishWizard(false)}
+                onClose={closePublishWizard}
                 selectedAds={selectedAds}
                 campaignName={campaign.name || 'Untitled Campaign'}
                 driveFolderUrl={campaign.brief?.driveFolderUrl}
@@ -587,7 +617,8 @@ function ReviewCard({ row, index, onUpdateRow, userName, globalSettings, driveAc
     }
 
     const selectedAsset = row.assets[selectedAssetIndex] || row.assets[0];
-    const hasMultipleAssets = row.assets.length > 1;
+    // A single ad publishes only its first asset, so that's all Review shows
+    const hasMultipleAssets = !isSingleAdType(row.adType) && row.assets.length > 1;
 
     // Carousels publish only Primary Text 1 (the message above all cards)
     const filledPrimaryTexts = (row.adType === 'carousel'
@@ -637,6 +668,83 @@ function ReviewCard({ row, index, onUpdateRow, userName, globalSettings, driveAc
     const handleClearComments = () => {
         onUpdateRow(row.id, { comments: [], reviewStatus: 'pending' });
     };
+
+    // The media area, shown inside the ad preview
+    const media = (
+        <div className="relative bg-black" style={{ maxHeight: '400px' }}>
+            {selectedAsset ? (
+                isPlayingVideo && selectedAsset.type === 'video' && selectedAsset.driveFileId && driveAccessToken ? (
+                    /* Video player — only shown after user clicks play */
+                    <div className="relative">
+                        <video
+                            key={selectedAsset.driveFileId}
+                            src={`/api/video-proxy?fileId=${selectedAsset.driveFileId}`}
+                            poster={selectedAsset.permanentThumbnailUrl || selectedAsset.cachedThumbnail || selectedAsset.thumbnailUrl}
+                            controls
+                            autoPlay
+                            muted
+                            playsInline
+                            className="w-full object-contain"
+                            style={{ maxHeight: '400px' }}
+                        />
+                        <button
+                            onClick={() => setIsPlayingVideo(false)}
+                            className="absolute top-2 right-2 p-1 rounded-full bg-black/70 hover:bg-black/90 text-white transition-colors z-10"
+                            title="Stop preview"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    </div>
+                ) : (
+                    /* Thumbnail view — default for all assets */
+                    <div className="relative group">
+                        {(selectedAsset.permanentThumbnailUrl || selectedAsset.cachedThumbnail || selectedAsset.thumbnailUrl) ? (
+                            <img
+                                src={selectedAsset.permanentThumbnailUrl || selectedAsset.cachedThumbnail || selectedAsset.thumbnailUrl}
+                                alt={selectedAsset.name}
+                                className="w-full object-contain"
+                                style={{ maxHeight: '400px' }}
+                            />
+                        ) : selectedAsset.type === 'video' ? (
+                            <div className="flex items-center justify-center" style={{ height: '300px' }}>
+                                <Film className="w-12 h-12 text-foreground-subtle" />
+                            </div>
+                        ) : (
+                            <div className="flex items-center justify-center" style={{ height: '300px' }}>
+                                <ImageIcon className="w-12 h-12 text-foreground-subtle" />
+                            </div>
+                        )}
+                        {/* Play button overlay for videos when Drive is connected */}
+                        {selectedAsset.type === 'video' && selectedAsset.driveFileId && driveAccessToken && (
+                            <button
+                                onClick={() => setIsPlayingVideo(true)}
+                                className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Play video"
+                            >
+                                <div className="w-14 h-14 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
+                                    <Film className="w-7 h-7 text-black" />
+                                </div>
+                            </button>
+                        )}
+                        {/* Amber nudge for videos when Drive is NOT connected */}
+                        {selectedAsset.type === 'video' && selectedAsset.driveFileId && !driveAccessToken && (
+                            <div className="group/nudge absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/90 backdrop-blur-sm text-white text-xs font-medium z-[3] cursor-default shadow-lg">
+                                <CloudOff className="w-3.5 h-3.5" />
+                                Connect Drive to preview
+                                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/90 text-white text-[10px] whitespace-nowrap opacity-0 group-hover/nudge:opacity-100 transition-opacity pointer-events-none">
+                                    Go to Settings → Connections
+                                </span>
+                            </div>
+                        )}
+                    </div>
+                )
+            ) : (
+                <div className="flex items-center justify-center" style={{ height: '200px' }}>
+                    <ImageIcon className="w-12 h-12 text-foreground-subtle" />
+                </div>
+            )}
+        </div>
+    );
 
     return (
         <div
@@ -692,359 +800,298 @@ function ReviewCard({ row, index, onUpdateRow, userName, globalSettings, driveAc
                 </div>
             </div>
 
-            {/* === Zone 2: Clean Viewport === */}
-            <div className="relative bg-black" style={{ maxHeight: '400px' }}>
-                {selectedAsset ? (
-                    isPlayingVideo && selectedAsset.type === 'video' && selectedAsset.driveFileId && driveAccessToken ? (
-                        /* Video player — only shown after user clicks play */
-                        <div className="relative">
-                            <video
-                                key={selectedAsset.driveFileId}
-                                src={`/api/video-proxy?fileId=${selectedAsset.driveFileId}`}
-                                poster={selectedAsset.permanentThumbnailUrl || selectedAsset.cachedThumbnail || selectedAsset.thumbnailUrl}
-                                controls
-                                autoPlay
-                                muted
-                                playsInline
-                                className="w-full object-contain"
-                                style={{ maxHeight: '400px' }}
-                            />
+            {/* The ad as Meta shows it on the left; ad name, every copy option, comments and review on the right */}
+            <div className="xl:grid xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+                <div className="p-4 space-y-3 bg-background/60 border-b xl:border-b-0 xl:border-r border-border">
+                    <div className="max-w-md mx-auto xl:max-w-none">
+                        <AdPreview key={row.id} row={row} assetIndex={selectedAssetIndex} media={media} />
+                    </div>
+
+                    {/* Asset (or carousel card) navigation */}
+                    {hasMultipleAssets && (
+                        <div className="flex items-center justify-center gap-1">
                             <button
-                                onClick={() => setIsPlayingVideo(false)}
-                                className="absolute top-2 right-2 p-1 rounded-full bg-black/70 hover:bg-black/90 text-white transition-colors z-10"
-                                title="Stop preview"
+                                onClick={() => setSelectedAssetIndex((prev) => (prev - 1 + row.assets.length) % row.assets.length)}
+                                className="p-1 rounded hover:bg-white/10 transition-colors"
+                                title={isCarouselRow ? 'Previous card' : 'Previous asset'}
+                                aria-label={isCarouselRow ? 'Previous card' : 'Previous asset'}
                             >
-                                <X className="w-4 h-4" />
+                                <ChevronLeft className="w-4 h-4 text-foreground-muted" />
+                            </button>
+                            <span className="text-xs text-foreground-muted tabular-nums min-w-[4rem] text-center">
+                                {isCarouselRow ? 'Card ' : ''}{selectedAssetIndex + 1} / {row.assets.length}
+                            </span>
+                            <button
+                                onClick={() => setSelectedAssetIndex((prev) => (prev + 1) % row.assets.length)}
+                                className="p-1 rounded hover:bg-white/10 transition-colors"
+                                title={isCarouselRow ? 'Next card' : 'Next asset'}
+                                aria-label={isCarouselRow ? 'Next card' : 'Next asset'}
+                            >
+                                <ChevronRight className="w-4 h-4 text-foreground-muted" />
                             </button>
                         </div>
-                    ) : (
-                        /* Thumbnail view — default for all assets */
-                        <div className="relative group">
-                            {(selectedAsset.permanentThumbnailUrl || selectedAsset.cachedThumbnail || selectedAsset.thumbnailUrl) ? (
-                                <img
-                                    src={selectedAsset.permanentThumbnailUrl || selectedAsset.cachedThumbnail || selectedAsset.thumbnailUrl}
-                                    alt={selectedAsset.name}
-                                    className="w-full object-contain"
-                                    style={{ maxHeight: '400px' }}
-                                />
-                            ) : selectedAsset.type === 'video' ? (
-                                <div className="flex items-center justify-center" style={{ height: '300px' }}>
-                                    <Film className="w-12 h-12 text-foreground-subtle" />
-                                </div>
-                            ) : (
-                                <div className="flex items-center justify-center" style={{ height: '300px' }}>
-                                    <ImageIcon className="w-12 h-12 text-foreground-subtle" />
-                                </div>
-                            )}
-                            {/* Play button overlay for videos when Drive is connected */}
-                            {selectedAsset.type === 'video' && selectedAsset.driveFileId && driveAccessToken && (
-                                <button
-                                    onClick={() => setIsPlayingVideo(true)}
-                                    className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    title="Play video"
-                                >
-                                    <div className="w-14 h-14 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
-                                        <Film className="w-7 h-7 text-black" />
-                                    </div>
-                                </button>
-                            )}
-                            {/* Amber nudge for videos when Drive is NOT connected */}
-                            {selectedAsset.type === 'video' && selectedAsset.driveFileId && !driveAccessToken && (
-                                <div className="group/nudge absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/90 backdrop-blur-sm text-white text-xs font-medium z-[3] cursor-default shadow-lg">
-                                    <CloudOff className="w-3.5 h-3.5" />
-                                    Connect Drive to preview
-                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-black/90 text-white text-[10px] whitespace-nowrap opacity-0 group-hover/nudge:opacity-100 transition-opacity pointer-events-none">
-                                        Go to Settings → Connections
-                                    </span>
-                                </div>
-                            )}
+                    )}
+
+                    {/* Multi-media: stacks decide which shape serves where, so reviewers see them before approving */}
+                    {row.adType === 'multi_media' && row.assets.length > 0 && (
+                        <div className="px-3 py-3 rounded-lg bg-background-tertiary border border-border">
+                            <MediaStacks
+                                assets={row.assets}
+                                size="lg"
+                                selectedIndex={selectedAssetIndex}
+                                onSelect={(i) => { setSelectedAssetIndex(i); setIsPlayingVideo(false); }}
+                            />
                         </div>
-                    )
-                ) : (
-                    <div className="flex items-center justify-center" style={{ height: '200px' }}>
-                        <ImageIcon className="w-12 h-12 text-foreground-subtle" />
-                    </div>
-                )}
-            </div>
+                    )}
 
-            {/* Multi-media: stacks decide which shape serves where, so reviewers see them before approving */}
-            {row.adType === 'multi_media' && row.assets.length > 0 && (
-                <div className="px-4 py-3 bg-background-tertiary border-t border-border">
-                    <MediaStacks
-                        assets={row.assets}
-                        size="lg"
-                        selectedIndex={selectedAssetIndex}
-                        onSelect={(i) => { setSelectedAssetIndex(i); setIsPlayingVideo(false); }}
-                    />
-                </div>
-            )}
-
-            {/* === Zone 3: Bottom Info Bar === */}
-            <div className="flex items-center justify-between px-4 py-2.5 bg-background-tertiary border-t border-border">
-                {/* Left: Row number + Angle name */}
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <span className="w-7 h-7 flex items-center justify-center rounded-md bg-foreground-subtle/20 text-foreground-muted text-xs font-bold flex-shrink-0">
-                        {String(index + 1).padStart(2, '0')}
-                    </span>
-                    <h3 className="text-sm font-semibold text-foreground truncate">
-                        {row.angleName || 'Untitled'}
-                    </h3>
                 </div>
 
-                {/* Center: Asset arrow navigation */}
-                {hasMultipleAssets && (
-                    <div className="flex items-center gap-1 px-3 flex-shrink-0">
-                        <button
-                            onClick={() => setSelectedAssetIndex((prev) => (prev - 1 + row.assets.length) % row.assets.length)}
-                            className="p-1 rounded hover:bg-white/10 transition-colors"
-                            title="Previous asset"
-                        >
-                            <ChevronLeft className="w-4 h-4 text-foreground-muted" />
-                        </button>
-                        <span className="text-xs text-foreground-muted tabular-nums min-w-[2rem] text-center">
-                            {selectedAssetIndex + 1} / {row.assets.length}
-                        </span>
-                        <button
-                            onClick={() => setSelectedAssetIndex((prev) => (prev + 1) % row.assets.length)}
-                            className="p-1 rounded hover:bg-white/10 transition-colors"
-                            title="Next asset"
-                        >
-                            <ChevronRight className="w-4 h-4 text-foreground-muted" />
-                        </button>
-                    </div>
-                )}
-
-                {/* Right: Status badges — Published supersedes Approved */}
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {row.lastPublishedAt ? (
-                        <span className="group relative flex items-center gap-1 px-2 py-1 rounded-full bg-blue-500/90 text-white text-[11px] font-medium">
-                            <Send className="w-3 h-3" />
-                            Published
-                            <span className="absolute bottom-full right-0 mb-2 px-2 py-1 rounded bg-black/90 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                                Sent to Meta on {new Date(row.lastPublishedAt).toLocaleDateString()}
+                <div className="min-w-0">
+                    {/* === Zone 3: Info Bar === */}
+                    <div className="flex items-center justify-between px-4 py-2.5 bg-background-tertiary border-b border-border">
+                        {/* Left: Row number + Angle name */}
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="w-7 h-7 flex items-center justify-center rounded-md bg-foreground-subtle/20 text-foreground-muted text-xs font-bold flex-shrink-0">
+                                {String(index + 1).padStart(2, '0')}
                             </span>
-                        </span>
-                    ) : isReviewed ? (
-                        <span className="group relative flex items-center gap-1 px-2 py-1 rounded-full bg-accent-success/90 text-white text-[11px] font-medium">
-                            <CheckCircle2 className="w-3 h-3" />
-                            Approved
-                            {row.approvedAt && (
-                                <span className="absolute bottom-full right-0 mb-2 px-2 py-1 rounded bg-black/90 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                                    Approved on {new Date(row.approvedAt).toLocaleDateString()}
+                            <h3 className="text-sm font-semibold text-foreground truncate">
+                                {row.angleName || 'Untitled'}
+                            </h3>
+                        </div>
+
+                        {/* Right: Status badges — Published supersedes Approved */}
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {row.lastPublishedAt ? (
+                                <span className="group relative flex items-center gap-1 px-2 py-1 rounded-full bg-blue-500/90 text-white text-[11px] font-medium">
+                                    <Send className="w-3 h-3" />
+                                    Published
+                                    <span className="absolute bottom-full right-0 mb-2 px-2 py-1 rounded bg-black/90 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                        Sent to Meta on {new Date(row.lastPublishedAt).toLocaleDateString()}
+                                    </span>
+                                </span>
+                            ) : isReviewed ? (
+                                <span className="group relative flex items-center gap-1 px-2 py-1 rounded-full bg-accent-success/90 text-white text-[11px] font-medium">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    Approved
+                                    {row.approvedAt && (
+                                        <span className="absolute bottom-full right-0 mb-2 px-2 py-1 rounded bg-black/90 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                            Approved on {new Date(row.approvedAt).toLocaleDateString()}
+                                        </span>
+                                    )}
+                                </span>
+                            ) : null}
+                            {lastCommentFromBuilder && !isReviewed && (
+                                <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-purple-500/90 text-white text-[11px] font-medium animate-pulse">
+                                    <MessageSquare className="w-3 h-3" />
+                                    Response
                                 </span>
                             )}
-                        </span>
-                    ) : null}
-                    {lastCommentFromBuilder && !isReviewed && (
-                        <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-purple-500/90 text-white text-[11px] font-medium animate-pulse">
-                            <MessageSquare className="w-3 h-3" />
-                            Response
-                        </span>
-                    )}
-                    {needsChanges && !lastCommentFromBuilder && (
-                        <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/90 text-white text-[11px] font-medium">
-                            <AlertCircle className="w-3 h-3" />
-                            Changes
-                        </span>
-                    )}
-                </div>
-            </div>
+                            {needsChanges && !lastCommentFromBuilder && (
+                                <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/90 text-white text-[11px] font-medium">
+                                    <AlertCircle className="w-3 h-3" />
+                                    Changes
+                                </span>
+                            )}
+                        </div>
+                    </div>
 
-            {/* Generated Ad Name - for reviewer verification */}
-            <div className={`px-5 py-3 border-b ${row.generatedAdName
-                ? 'bg-background-tertiary/50 border-border/50'
-                : 'bg-rose-500/10 border-rose-500/30'}`}
-            >
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-foreground-subtle uppercase tracking-wider">
-                            Ad Name
-                        </span>
-                        {!row.generatedAdName && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                                Missing
-                            </span>
+                    {/* Generated Ad Name - for reviewer verification */}
+                    <div className={`px-5 py-3 border-b ${row.generatedAdName
+                        ? 'bg-background-tertiary/50 border-border/50'
+                        : 'bg-rose-500/10 border-rose-500/30'}`}
+                    >
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-semibold text-foreground-subtle uppercase tracking-wider">
+                                    Ad Name
+                                </span>
+                                {!row.generatedAdName && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                                        Missing
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        <p className={`mt-1 font-mono text-sm ${row.generatedAdName
+                            ? 'text-foreground'
+                            : 'text-foreground-muted italic'}`}
+                        >
+                            {row.generatedAdName || 'No ad name set by builder'}
+                        </p>
+                    </div>
+
+                    {/* Copy Section */}
+                    <div className="p-5 space-y-4">
+                        {/* Two column layout for copy */}
+                        <div className="grid grid-cols-2 gap-4">
+                            {/* Primary Texts */}
+                            <div>
+                                <h4 className={`text-xs font-semibold uppercase tracking-wider mb-2 ${COPY_TYPE.primary_text.text}`}>
+                                    Primary Text ({filledPrimaryTexts.length})
+                                </h4>
+                                <div className="space-y-2">
+                                    {filledPrimaryTexts.length > 0 ? (
+                                        filledPrimaryTexts.map((slot, idx) => (
+                                            <div
+                                                key={idx}
+                                                className={`p-2 rounded-lg bg-background-tertiary/50 border ${COPY_TYPE.primary_text.border}`}
+                                            >
+                                                <span className="text-xs text-foreground-muted font-medium">{idx + 1}.</span>
+                                                <p className="text-sm text-foreground leading-relaxed mt-0.5 whitespace-pre-wrap">
+                                                    {slot?.isCustomized ? slot.localText : slot?.masterItem.text}
+                                                </p>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <p className="text-xs text-foreground-muted italic">No primary texts</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Headlines */}
+                            <div>
+                                <h4 className={`text-xs font-semibold uppercase tracking-wider mb-2 ${COPY_TYPE.headline.text}`}>
+                                    Headlines ({filledHeadlineCount})
+                                </h4>
+                                <div className="space-y-2">
+                                    {displayHeadlines.length > 0 ? (
+                                        displayHeadlines.map((slot, idx) => (
+                                            <div
+                                                key={idx}
+                                                className={`p-2 rounded-lg bg-background-tertiary/50 border ${COPY_TYPE.headline.border}`}
+                                            >
+                                                <span className="text-xs text-foreground-muted font-medium">
+                                                    {isCarouselRow ? `Card ${idx + 1}.` : `${idx + 1}.`}
+                                                </span>
+                                                {slot ? (
+                                                    <p className="text-sm text-foreground font-medium mt-0.5">
+                                                        {slot.isCustomized ? slot.localText : slot.masterItem.text}
+                                                    </p>
+                                                ) : (
+                                                    <p className="text-sm text-foreground-muted italic mt-0.5">No headline</p>
+                                                )}
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <p className="text-xs text-foreground-muted italic">No headlines</p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Destination URL */}
+                        {row.slots.destinationUrl && (
+                            <div className="pt-3 border-t border-border">
+                                <h4 className="text-xs font-semibold text-foreground-subtle uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                    <Link2 className="w-3 h-3" />
+                                    Destination URL
+                                </h4>
+                                <div className="flex items-center gap-1.5">
+                                    <a
+                                        href={row.slots.destinationUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-sm text-accent-primary hover:underline truncate"
+                                    >
+                                        {row.slots.destinationUrl}
+                                    </a>
+                                    <CopyButton text={row.slots.destinationUrl} />
+                                </div>
+                            </div>
                         )}
-                    </div>
-                </div>
-                <p className={`mt-1 font-mono text-sm ${row.generatedAdName
-                    ? 'text-foreground'
-                    : 'text-foreground-muted italic'}`}
-                >
-                    {row.generatedAdName || 'No ad name set by builder'}
-                </p>
-            </div>
 
-            {/* Copy Section */}
-            <div className="p-5 space-y-4">
-                {/* Two column layout for copy */}
-                <div className="grid grid-cols-2 gap-4">
-                    {/* Primary Texts */}
-                    <div>
-                        <h4 className="text-xs font-semibold text-foreground-subtle uppercase tracking-wider mb-2">
-                            Primary Text ({filledPrimaryTexts.length})
-                        </h4>
-                        <div className="space-y-2">
-                            {filledPrimaryTexts.length > 0 ? (
-                                filledPrimaryTexts.map((slot, idx) => (
-                                    <div
-                                        key={idx}
-                                        className="p-2 rounded-lg bg-background-tertiary/50 border border-border/50"
-                                    >
-                                        <span className="text-xs text-foreground-muted font-medium">{idx + 1}.</span>
-                                        <p className="text-sm text-foreground leading-relaxed mt-0.5">
-                                            {slot?.isCustomized ? slot.localText : slot?.masterItem.text}
-                                        </p>
-                                    </div>
-                                ))
-                            ) : (
-                                <p className="text-xs text-foreground-muted italic">No primary texts</p>
+                        {/* Comment Thread Section */}
+                        <div className="pt-3 border-t border-border">
+                            <h4 className="text-xs font-semibold text-foreground-subtle uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                <MessageSquare className="w-3 h-3" />
+                                Comments {hasComments && `(${comments.length})`}
+                            </h4>
+                            {/* Existing comments */}
+                            {hasComments && (
+                                <div className="space-y-2 mb-3">
+                                    {comments.map((comment) => (
+                                        <div
+                                            key={comment.id}
+                                            className={`p-3 rounded-lg text-sm ${comment.author === 'builder'
+                                                ? 'bg-accent-primary/10 border border-accent-primary/30'
+                                                : 'bg-amber-500/10 border border-amber-500/30'
+                                                }`}
+                                        >
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className={`font-medium ${comment.author === 'builder' ? 'text-accent-primary' : 'text-amber-500'
+                                                    }`}>
+                                                    {comment.authorName || (comment.author === 'builder' ? 'Builder' : 'Reviewer')}
+                                                </span>
+                                                <span className="text-xs text-foreground-subtle">
+                                                    {new Date(comment.createdAt).toLocaleDateString()}
+                                                </span>
+                                            </div>
+                                            <p className="text-foreground">{comment.text}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Add feedback input - always visible, inline style like Build Mode */}
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={feedbackText}
+                                    onChange={(e) => setFeedbackText(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleSendFeedback()}
+                                    placeholder="Add feedback for builder..."
+                                    className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:border-amber-500"
+                                />
+                                <button
+                                    onClick={handleSendFeedback}
+                                    disabled={!feedbackText.trim()}
+                                    className="px-3 py-2 rounded-lg bg-amber-500 text-black disabled:opacity-50 hover:bg-amber-400 transition-colors"
+                                >
+                                    <Send className="w-4 h-4" />
+                                </button>
+                            </div>
+                            {hasComments && (
+                                <button
+                                    onClick={handleClearComments}
+                                    className="text-xs text-foreground-subtle hover:text-foreground mt-2"
+                                >
+                                    Clear All Comments
+                                </button>
                             )}
                         </div>
-                    </div>
 
-                    {/* Headlines */}
-                    <div>
-                        <h4 className="text-xs font-semibold text-foreground-subtle uppercase tracking-wider mb-2">
-                            Headlines ({filledHeadlineCount})
-                        </h4>
-                        <div className="space-y-2">
-                            {displayHeadlines.length > 0 ? (
-                                displayHeadlines.map((slot, idx) => (
-                                    <div
-                                        key={idx}
-                                        className="p-2 rounded-lg bg-background-tertiary/50 border border-border/50"
-                                    >
-                                        <span className="text-xs text-foreground-muted font-medium">
-                                            {isCarouselRow ? `Card ${idx + 1}.` : `${idx + 1}.`}
-                                        </span>
-                                        {slot ? (
-                                            <p className="text-sm text-foreground font-medium mt-0.5">
-                                                {slot.isCustomized ? slot.localText : slot.masterItem.text}
-                                            </p>
-                                        ) : (
-                                            <p className="text-sm text-foreground-muted italic mt-0.5">No headline</p>
-                                        )}
-                                    </div>
-                                ))
+                        {/* Actions */}
+                        <div className="flex items-center gap-3 pt-3 border-t border-border">
+                            {row.lastPublishedAt && isReviewed ? (
+                                /* Published + still reviewed → static badge */
+                                <div className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-blue-500 text-white">
+                                    <Send className="w-4 h-4" />
+                                    Published ✓
+                                </div>
+                            ) : row.lastPublishedAt && !isReviewed ? (
+                                /* Published but pulled out of review (comments/changes) → re-approvable */
+                                <button
+                                    onClick={handleToggleReviewed}
+                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-blue-500/20 text-blue-300 border border-blue-500/40 hover:bg-blue-500/30 transition-colors"
+                                >
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    Re-approve for Publish
+                                </button>
                             ) : (
-                                <p className="text-xs text-foreground-muted italic">No headlines</p>
-                            )}
-                        </div>
-                    </div>
-                </div>
-
-                {/* Destination URL */}
-                {row.slots.destinationUrl && (
-                    <div className="pt-3 border-t border-border">
-                        <h4 className="text-xs font-semibold text-foreground-subtle uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                            <Link2 className="w-3 h-3" />
-                            Destination URL
-                        </h4>
-                        <div className="flex items-center gap-1.5">
-                            <a
-                                href={row.slots.destinationUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sm text-accent-primary hover:underline truncate"
-                            >
-                                {row.slots.destinationUrl}
-                            </a>
-                            <CopyButton text={row.slots.destinationUrl} />
-                        </div>
-                    </div>
-                )}
-
-                {/* Comment Thread Section */}
-                <div className="pt-3 border-t border-border">
-                    <h4 className="text-xs font-semibold text-foreground-subtle uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                        <MessageSquare className="w-3 h-3" />
-                        Comments {hasComments && `(${comments.length})`}
-                    </h4>
-                    {/* Existing comments */}
-                    {hasComments && (
-                        <div className="space-y-2 mb-3">
-                            {comments.map((comment) => (
-                                <div
-                                    key={comment.id}
-                                    className={`p-3 rounded-lg text-sm ${comment.author === 'builder'
-                                        ? 'bg-accent-primary/10 border border-accent-primary/30'
-                                        : 'bg-amber-500/10 border border-amber-500/30'
+                                /* Never published → standard review toggle */
+                                <button
+                                    onClick={handleToggleReviewed}
+                                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${isReviewed
+                                        ? 'bg-accent-success text-white'
+                                        : 'bg-background-tertiary text-foreground hover:bg-accent-success/20'
                                         }`}
                                 >
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <span className={`font-medium ${comment.author === 'builder' ? 'text-accent-primary' : 'text-amber-500'
-                                            }`}>
-                                            {comment.authorName || (comment.author === 'builder' ? 'Builder' : 'Reviewer')}
-                                        </span>
-                                        <span className="text-xs text-foreground-subtle">
-                                            {new Date(comment.createdAt).toLocaleDateString()}
-                                        </span>
-                                    </div>
-                                    <p className="text-foreground">{comment.text}</p>
-                                </div>
-                            ))}
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    {isReviewed ? 'Reviewed ✓' : 'Mark Reviewed'}
+                                </button>
+                            )}
                         </div>
-                    )}
-
-                    {/* Add feedback input - always visible, inline style like Build Mode */}
-                    <div className="flex gap-2">
-                        <input
-                            type="text"
-                            value={feedbackText}
-                            onChange={(e) => setFeedbackText(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleSendFeedback()}
-                            placeholder="Add feedback for builder..."
-                            className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:border-amber-500"
-                        />
-                        <button
-                            onClick={handleSendFeedback}
-                            disabled={!feedbackText.trim()}
-                            className="px-3 py-2 rounded-lg bg-amber-500 text-black disabled:opacity-50 hover:bg-amber-400 transition-colors"
-                        >
-                            <Send className="w-4 h-4" />
-                        </button>
                     </div>
-                    {hasComments && (
-                        <button
-                            onClick={handleClearComments}
-                            className="text-xs text-foreground-subtle hover:text-foreground mt-2"
-                        >
-                            Clear All Comments
-                        </button>
-                    )}
-                </div>
-
-                {/* Actions */}
-                <div className="flex items-center gap-3 pt-3 border-t border-border">
-                    {row.lastPublishedAt && isReviewed ? (
-                        /* Published + still reviewed → static badge */
-                        <div className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-blue-500 text-white">
-                            <Send className="w-4 h-4" />
-                            Published ✓
-                        </div>
-                    ) : row.lastPublishedAt && !isReviewed ? (
-                        /* Published but pulled out of review (comments/changes) → re-approvable */
-                        <button
-                            onClick={handleToggleReviewed}
-                            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-blue-500/20 text-blue-300 border border-blue-500/40 hover:bg-blue-500/30 transition-colors"
-                        >
-                            <CheckCircle2 className="w-4 h-4" />
-                            Re-approve for Publish
-                        </button>
-                    ) : (
-                        /* Never published → standard review toggle */
-                        <button
-                            onClick={handleToggleReviewed}
-                            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${isReviewed
-                                ? 'bg-accent-success text-white'
-                                : 'bg-background-tertiary text-foreground hover:bg-accent-success/20'
-                                }`}
-                        >
-                            <CheckCircle2 className="w-4 h-4" />
-                            {isReviewed ? 'Reviewed ✓' : 'Mark Reviewed'}
-                        </button>
-                    )}
                 </div>
             </div>
         </div>

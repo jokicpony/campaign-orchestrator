@@ -8,7 +8,6 @@ import { db } from '@/lib/firebase/config';
 interface ConnectionHealth {
     google: 'connected' | 'needs_attention';
     meta: 'connected' | 'not_connected' | 'expired';
-    ai: 'configured' | 'not_configured';
     hasIssues: boolean;
 }
 
@@ -17,7 +16,6 @@ export function useConnectionHealth(): ConnectionHealth {
     const [health, setHealth] = useState<ConnectionHealth>({
         google: 'connected',
         meta: 'not_connected',
-        ai: 'not_configured',
         hasIssues: true,
     });
 
@@ -55,16 +53,6 @@ export function useConnectionHealth(): ConnectionHealth {
                 console.error('Failed to check Meta connection:', err);
             }
 
-            // Check AI provider status via server API (env var check)
-            let aiStatus: 'configured' | 'not_configured' = 'not_configured';
-            try {
-                const response = await fetch('/api/ai/generate');
-                const data = await response.json();
-                aiStatus = data.configured ? 'configured' : 'not_configured';
-            } catch {
-                aiStatus = 'not_configured';
-            }
-
             // Determine if there are issues that need attention
             const hasIssues =
                 googleStatus === 'needs_attention' ||
@@ -74,7 +62,6 @@ export function useConnectionHealth(): ConnectionHealth {
             setHealth({
                 google: googleStatus,
                 meta: metaStatus,
-                ai: aiStatus,
                 hasIssues,
             });
         }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
+import { isDriveFileId, isMetaId } from '@/lib/server/ids';
 import { requireMetaToken } from '@/lib/server/metaAuth';
 import { logger, serializeError } from '@/lib/logger';
 
@@ -45,6 +46,9 @@ export async function POST(request: NextRequest) {
                 { error: 'googleAccessToken, adAccountId, driveFileId, and assetType are required' },
                 { status: 400 }
             );
+        }
+        if (!isMetaId(adAccountId) || !isDriveFileId(driveFileId)) {
+            return NextResponse.json({ error: 'Invalid adAccountId or driveFileId' }, { status: 400 });
         }
 
         // ── Transcode shortcut for large videos ──────────────────────────
@@ -249,7 +253,7 @@ export async function POST(request: NextRequest) {
     } catch (error) {
         logger.error('upload', 'Drive-to-Meta transfer error', { error: serializeError(error) });
         return NextResponse.json(
-            { error: 'Failed to transfer file from Drive to Meta', details: String(error) },
+            { error: 'Failed to transfer file from Drive to Meta' },
             { status: 500 }
         );
     }

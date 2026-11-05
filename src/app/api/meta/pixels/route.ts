@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
+import { isMetaId } from '@/lib/server/ids';
 import { requireMetaToken } from '@/lib/server/metaAuth';
 import { logger, serializeError } from '@/lib/logger';
 
@@ -21,10 +22,10 @@ export async function POST(request: NextRequest) {
         const body = await request.json();
         const { adAccountId } = body;
 
-        if (!adAccountId) {
-            logger.error('pixels', 'Missing ad account ID in request');
+        if (!isMetaId(adAccountId)) {
+            logger.error('pixels', 'Missing or invalid ad account ID in request');
             return NextResponse.json(
-                { error: 'Missing ad account ID' },
+                { error: 'Missing or invalid ad account ID' },
                 { status: 400 }
             );
         }

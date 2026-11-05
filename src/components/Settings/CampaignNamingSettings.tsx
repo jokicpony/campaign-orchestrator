@@ -177,7 +177,7 @@ export function CampaignNamingSettings({ settings, onChange }: CampaignNamingSet
             <div>
                 <h3 className="text-lg font-semibold text-foreground mb-1">Campaign Naming Conventions</h3>
                 <p className="text-sm text-foreground-muted">
-                    Create templates for structured campaign names used during publishing
+                    Templates for campaign names
                 </p>
             </div>
 
@@ -200,7 +200,7 @@ export function CampaignNamingSettings({ settings, onChange }: CampaignNamingSet
                 {showAliasEditor && (
                     <div className="mt-3 space-y-2">
                         <p className="text-xs text-foreground-muted mb-2">
-                            Configure the shorthand used in generated campaign names for each campaign type
+                            Shorthand for each campaign type in names
                         </p>
                         {campaignTypes.map(ct => (
                             <div key={ct.id} className="flex items-center gap-3">

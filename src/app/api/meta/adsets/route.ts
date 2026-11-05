@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
+import { isMetaId } from '@/lib/server/ids';
 import { requireMetaToken } from '@/lib/server/metaAuth';
 import { getAdSets, isMetaTokenError } from '@/lib/meta/client';
 import { logger, serializeError } from '@/lib/logger';
@@ -20,9 +21,9 @@ export async function POST(request: NextRequest) {
         const body = await request.json();
         const { campaignId } = body;
 
-        if (!campaignId) {
+        if (!isMetaId(campaignId)) {
             return NextResponse.json(
-                { error: 'Missing campaign ID' },
+                { error: 'Missing or invalid campaign ID' },
                 { status: 400 }
             );
         }

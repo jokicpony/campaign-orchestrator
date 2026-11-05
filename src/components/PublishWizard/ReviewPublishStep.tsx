@@ -380,13 +380,7 @@ export function ReviewPublishStep({
                                     {isNewCampaign && (
                                         <div>
                                             <span className="text-foreground-muted text-xs">Initial Status</span>
-                                            <p className="font-medium text-foreground">
-                                                {settings.initialStatus === 'ACTIVE' ? (
-                                                    <span className="text-green-400">Active</span>
-                                                ) : (
-                                                    <span className="text-amber-400">Paused</span>
-                                                )}
-                                            </p>
+                                            <p className="font-medium text-amber-400">Paused</p>
                                         </div>
                                     )}
                                 </div>

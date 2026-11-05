@@ -3,11 +3,12 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MoreVertical, Copy, Trash2, FileText, Image as ImageIcon, Film, Link, Plus, ChevronLeft, ChevronRight, AlertTriangle, X, MessageSquare, Send, Settings2, Play, CloudOff } from 'lucide-react';
+import { MoreVertical, Copy, Trash2, FileText, Image as ImageIcon, Film, Link, Plus, ChevronLeft, ChevronRight, AlertTriangle, X, MessageSquare, Send, Settings2, Play, CloudOff, Sparkles, Type } from 'lucide-react';
 import { AdRow as AdRowType, CopyItem, SlotItem, Asset, AdType, AdComment, GlobalPromptSettings, mergeAdTypes, normalizeHeadlineSlots, CTA_OPTIONS, CallToAction } from '@/types';
-import { CAROUSEL_MIN_CARDS } from '@/types/ad-types';
+import { CAROUSEL_MIN_CARDS, isSingleAdType } from '@/types/ad-types';
 import { AD_TYPE_COLORS } from '@/types';
 import { DropSlot } from './DropSlot';
+import { COPY_TYPE } from '@/components/copyType';
 import { AssetPickerPopover } from '@/components/AssetPickerPopover';
 import { MediaStacks } from '@/components/MediaStacks';
 import { useAuth } from '@/components/AuthContext';
@@ -59,6 +60,20 @@ function PortalTooltip({ text, children }: { text: string; children: React.React
     );
 }
 
+// Copy someone typed straight into an empty slot
+function typedCopy(text: string, type: 'headline' | 'primary_text'): CopyItem {
+    return { id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, type, source: 'manual', createdAt: new Date() };
+}
+
+const filledCount = (slots: unknown[]) => slots.filter(Boolean).length;
+
+/** How many slots a column shows: up to the last filled one plus `extra` empty, and at least `min`. */
+function shownSlotCount(slots: unknown[], min: number, extra = 1): number {
+    let last = -1;
+    slots.forEach((s, i) => { if (s) last = i; });
+    return Math.min(slots.length, Math.max(min, last + 1 + extra));
+}
+
 interface AdRowProps {
     row: AdRowType;
     rowIndex: number;  // 0-based index for display as row number
@@ -84,6 +99,11 @@ interface AdRowProps {
     hasFolderConfigured?: boolean;
     // Whether assets are currently loading
     isAssetsLoading?: boolean;
+    // Copywriter: highlighted when it's writing for this row; the sparkle aims it here
+    isCopyTarget?: boolean;
+    onAimCopywriter?: () => void;
+    /** Make this row the selected ad (on any click or focus inside it). */
+    onSelect?: () => void;
 }
 
 export function AdRow({
@@ -103,6 +123,9 @@ export function AdRow({
     onRefreshAssets,
     hasFolderConfigured,
     isAssetsLoading,
+    isCopyTarget,
+    onAimCopywriter,
+    onSelect,
 }: AdRowProps) {
     const { driveAccessToken } = useAuth();
     const [showMenu, setShowMenu] = useState(false);
@@ -123,13 +146,10 @@ export function AdRow({
     const [showNamingSettings, setShowNamingSettings] = useState(false);
     const [isEditingAngleName, setIsEditingAngleName] = useState(false);
     const [isPlayingVideo, setIsPlayingVideo] = useState(false);
-    const [hasInteractedWithNaming, setHasInteractedWithNaming] = useState(false);
-
-    // Mark as interacted when user opens naming panel OR if already has a
-    // saved name — state adjustment during render
-    if ((showNamingSettings || row.generatedAdName) && !hasInteractedWithNaming) {
-        setHasInteractedWithNaming(true);
-    }
+    // The ad name saves itself from the naming template once the row has an
+    // angle name and a type (or someone has opened the naming panel), so Review
+    // and publish never see a row without one.
+    const readyToName = !!row.generatedAdName || showNamingSettings || (!!row.angleName?.trim() && !!row.adType);
 
     // Compute generated ad name at component level for autosave
     const computedGeneratedName = useMemo(() => {
@@ -166,13 +186,12 @@ export function AdRow({
 
     // Sync generated name to row data — relies on page-level debounce for Firestore persistence
     useEffect(() => {
-        // Only sync if user has interacted with naming panel
-        if (!hasInteractedWithNaming) return;
+        if (!readyToName) return;
         if (!computedGeneratedName || computedGeneratedName === row.generatedAdName) return;
 
         // Call onUpdate directly — the page-level 3s debounce handles coalescing
         onUpdate({ generatedAdName: computedGeneratedName });
-    }, [computedGeneratedName, row.generatedAdName, onUpdate, hasInteractedWithNaming]);
+    }, [computedGeneratedName, row.generatedAdName, onUpdate, readyToName]);
 
     // Comment helpers
     const comments = row.comments || [];
@@ -235,6 +254,12 @@ export function AdRow({
             const columnName = slotType === 'headline' ? 'Headlines' : 'Primary Texts';
             showDuplicateWarning(columnName);
             return; // Prevent the drop
+        }
+
+        // Copywriter results and copy typed into a slot join the Active Palette
+        // (deduped by text there), so other rows can reuse them
+        if ((item.source === 'ai_generated' || item.source === 'manual') && onAddToActive) {
+            onAddToActive(item);
         }
 
         // Auto-add historical items to Active Palette
@@ -346,35 +371,25 @@ export function AdRow({
         [globalSettings?.adTypes]
     );
 
-    const currentTypeConfig = adTypesConfig.find(t => t.id === row.adType) || adTypesConfig[0];
-    const maxAssets = currentTypeConfig?.maxAssets || 10;
+    // A row with no type yet takes as many assets as any type allows
+    const currentTypeConfig = adTypesConfig.find(t => t.id === row.adType);
+    const maxAssets = currentTypeConfig?.maxAssets ?? Math.max(...adTypesConfig.map(t => t.maxAssets));
     const showStacks = row.adType === 'multi_media' && row.assets.length > 0;
     const stackCount = useMemo(() => (showStacks ? buildStacks(row.assets).length : 0), [showStacks, row.assets]);
 
-    // Handle ad type change with limit enforcement
+    // Changing type keeps every asset, so switching back loses nothing; a row
+    // over its new type's limit says what publishes (extraSingleAssets)
     const handleTypeChange = (newType: AdType) => {
-        const newTypeConfig = adTypesConfig.find(t => t.id === newType);
-        const newMax = newTypeConfig?.maxAssets || 10;
-
-        // If current assets exceed new max, trim them
-        let updatedAssets = [...row.assets];
-        if (updatedAssets.length > newMax) {
-            updatedAssets = updatedAssets.slice(0, newMax);
-        }
-
         onUpdate({
             adType: newType,
-            assets: updatedAssets,
             slots: {
                 ...row.slots,
-                headlines: normalizeHeadlineSlots(row.slots.headlines, newType, updatedAssets.length),
+                headlines: normalizeHeadlineSlots(row.slots.headlines, newType, row.assets.length),
             },
         });
-
-        if (displayedAssetIndex >= newMax) {
-            setDisplayedAssetIndex(0);
-        }
     };
+    // Single ads publish one asset; older rows (or a switch from another type) can hold more
+    const extraSingleAssets = isSingleAdType(row.adType) && row.assets.length > 1;
 
     const displayedAsset = row.assets[displayedAssetIndex] || row.assets[0];
     const hasAssets = row.assets.length > 0;
@@ -382,7 +397,14 @@ export function AdRow({
     const showApplyToAll = totalRows > 1;
 
     return (
-        <div className="bg-background-secondary border border-border rounded-xl p-4 hover:border-border-hover transition-colors relative">
+        <div
+            id={`ad-row-${row.id}`}
+            onPointerDownCapture={onSelect}
+            onFocusCapture={onSelect}
+            className={`@container bg-background-secondary border rounded-xl p-4 transition-colors relative ${isCopyTarget
+                ? 'border-purple-500/50 ring-1 ring-purple-500/30'
+                : 'border-border hover:border-border-hover'}`}
+        >
             {/* Duplicate Warning Banner */}
             <AnimatePresence>
                 {duplicateWarning && (
@@ -445,7 +467,9 @@ export function AdRow({
                             ? 'bg-accent-primary/20 border-accent-primary text-accent-primary'
                             : 'bg-background-tertiary border-border text-foreground-muted hover:text-foreground hover:border-border-hover'
                             }`}
-                        title="Ad Naming Settings"
+                        title={row.generatedAdName
+                            ? `Ad name: ${row.generatedAdName}`
+                            : 'No ad name yet: add an angle name and a type.'}
                     >
                         <Settings2 className="w-4 h-4" />
                     </button>
@@ -454,6 +478,20 @@ export function AdRow({
                         <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
                     )}
                 </div>
+
+                {/* Copywriter: open it in the Palette, aimed at this row */}
+                {onAimCopywriter && (
+                    <button
+                        onClick={onAimCopywriter}
+                        className={`p-1.5 rounded-lg border transition-colors ${isCopyTarget
+                            ? 'bg-purple-500/15 border-purple-500/50 text-purple-300'
+                            : 'bg-background-tertiary border-border text-foreground-muted hover:text-purple-300 hover:border-purple-500/40'}`}
+                        title="Write copy for this ad"
+                        aria-label="Write copy for this ad"
+                    >
+                        <Sparkles className="w-4 h-4" />
+                    </button>
+                )}
 
                 {/* Published badge - prominent blue tag */}
                 {row.lastPublishedAt && (
@@ -712,7 +750,8 @@ export function AdRow({
                 )}
             </AnimatePresence>
 
-            <div className="flex gap-4">
+            {/* Narrow rows (split-screen Palette): the URL column moves under the copy */}
+            <div className="flex flex-wrap @3xl:flex-nowrap gap-4">
                 {/* Visual Anchor (Thumbnail) */}
                 <div className="w-32 flex-shrink-0 relative">
                     {hasAssets ? (
@@ -939,13 +978,21 @@ export function AdRow({
                                                 {row.assets.length} / {maxAssets}
                                             </span>
                                         </div>
+                                        {extraSingleAssets && (
+                                            <span className="text-[10px] leading-tight text-amber-400">
+                                                Only the first asset publishes.{' '}
+                                                <button onClick={() => handleTypeChange('multi_media')} className="underline hover:text-amber-300">
+                                                    Use Multi-Media
+                                                </button>
+                                            </span>
+                                        )}
                                         {row.adType === 'carousel' && row.assets.length < CAROUSEL_MIN_CARDS && (
                                             <span className="text-[10px] leading-tight text-amber-400">
                                                 Needs at least {CAROUSEL_MIN_CARDS} cards to publish
                                             </span>
                                         )}
                                         {/* Multi-media rows show this hint beside their stacks instead */}
-                                        {currentTypeConfig?.recommendedUse && !showStacks && (
+                                        {currentTypeConfig?.recommendedUse && !showStacks && !extraSingleAssets && (
                                             <span className="text-[10px] leading-tight text-foreground-subtle/80 italic">
                                                 {currentTypeConfig.recommendedUse}
                                             </span>
@@ -962,15 +1009,21 @@ export function AdRow({
                 <div className="grid grid-cols-2 gap-4">
                     {/* Primary Text Slots */}
                     <div className="space-y-2">
-                        <div className="flex items-center gap-2 mb-2">
-                            <FileText className="w-3 h-3 text-foreground-subtle" />
-                            <span className="text-xs font-medium text-foreground-subtle uppercase tracking-wide">
+                        <div className={`flex items-center gap-2 mb-2 ${COPY_TYPE.primary_text.text}`}>
+                            <FileText className="w-3 h-3" />
+                            <span className="text-xs font-medium uppercase tracking-wide">
                                 Primary Text
                             </span>
+                            {row.adType !== 'carousel' && (
+                                <span className="ml-auto text-[10px] text-foreground-subtle" title="Filled primary text slots">
+                                    {filledCount(row.slots.primaryTexts)} of {row.slots.primaryTexts.length}
+                                </span>
+                            )}
                         </div>
                         {/* Carousels publish a single message above all cards — show one
-                            slot; slots 2–5 keep their data for a switch back to other types */}
-                        {(row.adType === 'carousel' ? row.slots.primaryTexts.slice(0, 1) : row.slots.primaryTexts).map((item, index) => (
+                            slot; slots 2–5 keep their data for a switch back to other types.
+                            Otherwise: the filled slots plus one empty one, so empty rows stay short. */}
+                        {row.slots.primaryTexts.slice(0, row.adType === 'carousel' ? 1 : shownSlotCount(row.slots.primaryTexts, 1)).map((item, index) => (
                             <DropSlot
                                 key={`pt-${index}`}
                                 slotType="primary_text"
@@ -979,6 +1032,7 @@ export function AdRow({
                                 onDrop={(droppedItem) => handleSlotDrop('primary_text', index, droppedItem)}
                                 onClear={() => handleSlotClear('primary_text', index)}
                                 onLocalEdit={(newText) => handleLocalEdit('primary_text', index, newText)}
+                                onTypeNew={(text) => handleSlotDrop('primary_text', index, typedCopy(text, 'primary_text'))}
                                 onApplyToAll={() => handleApplyToAll('primary_text', index)}
                                 showApplyToAll={showApplyToAll && item !== null}
                                 placeholder={row.adType === 'carousel' ? 'Primary Text — shown above all cards' : `Primary Text ${index + 1}`}
@@ -986,19 +1040,29 @@ export function AdRow({
                         ))}
                         {row.adType === 'carousel' && (
                             <p className="text-[10px] leading-tight text-foreground-subtle/80 italic px-1">
-                                Carousels use one primary text, shown above every card.
+                                One primary text, shown above every card.
                             </p>
                         )}
                     </div>
 
                     {/* Headline Slots */}
                     <div className="space-y-2">
-                        <div className="flex items-center gap-2 mb-2">
-                            <span className="text-xs font-medium text-foreground-subtle uppercase tracking-wide">
+                        <div className={`flex items-center gap-2 mb-2 ${COPY_TYPE.headline.text}`}>
+                            <Type className="w-3 h-3" />
+                            <span className="text-xs font-medium uppercase tracking-wide">
                                 Headlines
                             </span>
+                            {row.adType !== 'carousel' && (
+                                <span className="ml-auto text-[10px] text-foreground-subtle" title="Filled headline slots">
+                                    {filledCount(row.slots.headlines)} of {row.slots.headlines.length}
+                                </span>
+                            )}
                         </div>
-                        {row.slots.headlines.map((item, index) => (
+                        {/* Carousels: one headline per card (Card N = Headline N). Otherwise the
+                            filled slots plus one empty one. */}
+                        {row.slots.headlines.slice(0, row.adType === 'carousel'
+                            ? shownSlotCount(row.slots.headlines, Math.max(2, Math.min(row.assets.length, row.slots.headlines.length)), 0)
+                            : shownSlotCount(row.slots.headlines, 1)).map((item, index) => (
                             <DropSlot
                                 key={`h-${index}`}
                                 slotType="headline"
@@ -1007,9 +1071,10 @@ export function AdRow({
                                 onDrop={(droppedItem) => handleSlotDrop('headline', index, droppedItem)}
                                 onClear={() => handleSlotClear('headline', index)}
                                 onLocalEdit={(newText) => handleLocalEdit('headline', index, newText)}
+                                onTypeNew={(text) => handleSlotDrop('headline', index, typedCopy(text, 'headline'))}
                                 onApplyToAll={() => handleApplyToAll('headline', index)}
                                 showApplyToAll={showApplyToAll && item !== null}
-                                placeholder={`Headline ${index + 1}`}
+                                placeholder={row.adType === 'carousel' ? `Card ${index + 1} headline` : `Headline ${index + 1}`}
                             />
                         ))}
                     </div>
@@ -1023,7 +1088,7 @@ export function AdRow({
                                 Media Stacks · {stackCount} {stackCount === 1 ? 'stack' : 'stacks'}
                             </span>
                             <span className="text-[10px] text-foreground-subtle/80 italic truncate">
-                                {currentTypeConfig?.recommendedUse} Click a stack to preview it.
+                                {currentTypeConfig?.recommendedUse}
                             </span>
                         </div>
                         <MediaStacks
@@ -1037,9 +1102,9 @@ export function AdRow({
                 </div>
 
                 {/* URL Input + Actions */}
-                <div className="flex flex-col justify-between w-56">
+                <div className="w-full flex items-end gap-3 @3xl:w-56 @3xl:flex-col @3xl:items-stretch @3xl:justify-between @3xl:gap-0">
                     {/* URL Input */}
-                    <div>
+                    <div className="flex-1 min-w-0 @3xl:flex-none">
                         <div className="flex items-center gap-2 mb-2">
                             <Link className="w-3 h-3 text-foreground-subtle" />
                             <span className="text-xs font-medium text-foreground-subtle uppercase tracking-wide">
@@ -1057,7 +1122,7 @@ export function AdRow({
                     </div>
 
                     {/* CTA Selector */}
-                    <div className="mt-3">
+                    <div className="w-44 shrink-0 @3xl:w-auto @3xl:mt-3">
                         <span className="text-[10px] font-medium text-foreground-subtle uppercase tracking-wide mb-1 block">
                             Call to Action
                         </span>

@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, Image as ImageIcon, Film, Link, ExternalLink } from 'lucide-react';
 import { AdRow, CTA_OPTIONS, CallToAction, DEFAULT_AD_TYPES } from '@/types';
+import { publishedAssets } from '@/types/ad-types';
 import { WizardSettings } from './index';
 import { buildStacks } from '@/lib/meta/multiMedia';
 import { MediaStacks } from '@/components/MediaStacks';
@@ -50,7 +51,6 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
         });
     };
 
-    const getAssetCount = (ad: AdRow): number => ad.assets.length;
     const getCopyCount = (ad: AdRow): { pt: number; hl: number; hlUnused: number } => ({
         // Carousels publish only Primary Text 1
         pt: (ad.adType === 'carousel' ? ad.slots.primaryTexts.slice(0, 1) : ad.slots.primaryTexts).filter(Boolean).length,
@@ -72,14 +72,16 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
             </div>
 
             <p className="text-sm text-foreground-muted">
-                Review and make any last-minute changes to URLs or CTAs before publishing.
+                Last check on URLs and CTAs.
             </p>
 
             {/* Ad List */}
             <div className="space-y-3">
                 {selectedAds.map((ad) => {
                     const isExpanded = expandedRows.has(ad.id);
-                    const assetCount = getAssetCount(ad);
+                    // What publishes: a single ad saved with extra assets still sends only the first
+                    const assets = publishedAssets(ad.adType, ad.assets);
+                    const assetCount = assets.length;
                     const copyCount = getCopyCount(ad);
                     const displayedAsset = ad.assets[0];
                     const isMultiMedia = ad.adType === 'multi_media';
@@ -175,7 +177,7 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
                                 <div className="px-4 pb-4 -mt-1 space-y-2">
                                     <MediaStacks assets={ad.assets} size="md" />
                                     <p className="text-xs text-foreground-muted">
-                                        Shapes of the same creative are stacked by file name — Meta shows the one that fits each placement.
+                                        Meta shows the shape that fits each placement.
                                     </p>
                                     {ad.assets.some(a => a.type === 'image' && !a.dimensions) && (
                                         <p className="text-xs text-amber-500">
@@ -221,13 +223,13 @@ export function CreativeConfirmStep({ settings, selectedAds, onUpdate }: Creativ
                                     </div>
 
                                     {/* Assets Preview (multi-media shows stacks above instead) */}
-                                    {ad.assets.length > 0 && !isMultiMedia && (
+                                    {assets.length > 0 && !isMultiMedia && (
                                         <div>
                                             <label className="block text-xs font-medium text-foreground-muted mb-2">
-                                                Assets ({ad.assets.length})
+                                                Assets ({assets.length})
                                             </label>
                                             <div className="flex gap-2 overflow-x-auto pb-2">
-                                                {ad.assets.map((asset, idx) => (
+                                                {assets.map((asset, idx) => (
                                                     <div
                                                         key={asset.id || idx}
                                                         className="w-16 h-16 rounded-lg overflow-hidden bg-background flex-shrink-0 border border-border"

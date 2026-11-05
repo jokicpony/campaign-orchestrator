@@ -6,7 +6,7 @@ import { startMetaOAuth } from '@/lib/meta/startMetaOAuth';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, ChevronRight, ChevronLeft, Loader2, CheckCircle, AlertCircle, StopCircle } from 'lucide-react';
 import { AdRow, CallToAction } from '@/types';
-import { CAROUSEL_MIN_CARDS } from '@/types/ad-types';
+import { CAROUSEL_MIN_CARDS, publishedAssets } from '@/types/ad-types';
 import { buildStacks, VARIANT_FILE_TAGS } from '@/lib/meta/multiMedia';
 import { CampaignTargetStep } from './CampaignTargetStep';
 import { CampaignConfigStep } from './CampaignConfigStep';
@@ -140,9 +140,6 @@ export interface WizardSettings {
     // Global defaults for Step 3
     destinationUrl?: string;
     callToAction?: CallToAction;
-
-    // Step 4: Final settings
-    initialStatus: 'PAUSED' | 'ACTIVE';
 }
 
 export interface AdPublishResult {
@@ -240,7 +237,6 @@ function makeInitialSettings(campaignName: string, adSetName: string): WizardSet
         useIncrementalAttribution: true,
         enhancements: { ...ALL_ENHANCEMENTS_ON },
         adOverrides: {},
-        initialStatus: 'PAUSED',
         scheduledStartDate: undefined,
     };
 }
@@ -445,11 +441,11 @@ export function PublishWizard({
         }
         // Invalid parameter
         if (code === 100 && !subcode) {
-            return 'One or more fields in the ad were rejected by Meta. This could be an issue with the image, text, URL, or ad format.';
+            return 'Meta rejected part of this ad. Check the image, text, URL and format.';
         }
         // Drive transfer failed
         if (msg.includes('transfer') || msg.includes('drive')) {
-            return 'The file transfer from Google Drive to Meta failed. Your Drive session may have expired. Try reconnecting Drive and re-publishing.';
+            return 'Copying the file from Drive to Meta failed. Reconnect Drive and publish again.';
         }
         // Generic fallback
         return `Meta returned an error: "${data?.error || 'Unknown error'}". Check the ad\'s content (URL, copy, image) and try again.`;
@@ -673,6 +669,18 @@ export function PublishWizard({
                         };
                     }
 
+                    // The type decides the payload; there's no default (Flexible, the
+                    // old fallback, was retired), so a row without one stops here.
+                    if (!ad.adType) {
+                        return {
+                            rowId: ad.id,
+                            adName: ad.generatedAdName || ad.angleName || `Ad ${ad.id.slice(0, 6)}`,
+                            success: false,
+                            error: 'No ad type picked',
+                            errorDetail: 'Pick an ad type for this row in Build (Multi-Media, Carousel, Single Image or Single Video), then publish it again.',
+                        };
+                    }
+
                     // Upload assets using server-side Drive-to-Meta transfer to avoid CORS
                     const imageHashes: string[] = [];
                     const videoIds: string[] = [];
@@ -683,12 +691,10 @@ export function PublishWizard({
                     const orderedCards: Array<{ type: 'image' | 'video'; name?: string; hash?: string; videoId?: string; width?: number; height?: number; stack?: number }> = [];
                     const adName = ad.generatedAdName || ad.angleName || `Ad ${ad.id.slice(0, 6)}`;
 
-                    // Upload assets — for single_image/single_video, only upload the first asset
-                    // (remaining assets are morph references for the creative builder)
-                    const isSingleAd = ad.adType === 'single_image' || ad.adType === 'single_video';
+                    // Single Image/Video upload only their first asset
                     const isCarousel = ad.adType === 'carousel';
                     const isMultiMedia = ad.adType === 'multi_media';
-                    const assetsToUpload = isSingleAd ? ad.assets.slice(0, 1) : ad.assets;
+                    const assetsToUpload = publishedAssets(ad.adType, ad.assets);
 
                     // Multi-media: stack orientation variants by file name — the same
                     // buildStacks the confirm step shows, computed from the names
@@ -710,7 +716,7 @@ export function PublishWizard({
                                 // Multi-media names files by stack + shape (AdName_2_1x1,
                                 // AdName_2_9x16) so stacks stay recoverable on reuse
                                 const stackInfo = stackOf.get(assetIndex);
-                                const suffix = ad.assets.length <= 1 ? ''
+                                const suffix = assetsToUpload.length <= 1 ? ''
                                     : stackInfo
                                         ? `_${stackInfo.index + 1}${stackInfo.tag ? `_${stackInfo.tag}` : ''}`
                                         : `_${assetIndex + 1}`;
@@ -780,7 +786,7 @@ export function PublishWizard({
                             adName: ad.generatedAdName || ad.angleName || `Ad ${ad.id.slice(0, 6)}`,
                             success: false,
                             error: 'No assets could be uploaded',
-                            errorDetail: 'The file transfer from Google Drive to Meta failed. This usually means your Google Drive session expired during the batch. Try reconnecting Drive and re-publishing this ad.',
+                            errorDetail: 'Copying the file from Drive to Meta failed, usually because Drive signed out mid-batch. Reconnect Drive and publish this ad again.',
                         };
                     }
 
@@ -799,8 +805,8 @@ export function PublishWizard({
                     }
 
                     // Every other type must also get every asset it was built with —
-                    // publishing a flexible ad with some assets silently missing
-                    // isn't the ad the strategist assembled
+                    // publishing an ad with some assets silently missing isn't the
+                    // ad the strategist assembled
                     if (!isCarousel && orderedCards.length < assetsToUpload.length) {
                         return {
                             rowId: ad.id,
@@ -864,8 +870,7 @@ export function PublishWizard({
                             imageHashes,
                             videoIds,
                             urlParameters,
-                            status: settings.initialStatus,
-                            adType: ad.adType || 'flexible', // Route based on ad type selector
+                            adType: ad.adType, // Route based on ad type selector
                             ...(isCarousel && { cards: orderedCards }), // Ordered cards for carousel pairing
                             ...(isMultiMedia && { media: orderedCards }), // Ordered media; [0] is primary
                             pixelId: settings.pixelId || '', // Pixel ID for conversion tracking
@@ -900,7 +905,7 @@ export function PublishWizard({
                         adName: ad.generatedAdName || ad.angleName || `Ad ${ad.id.slice(0, 6)}`,
                         success: false,
                         error: adError instanceof Error ? adError.message : 'Unknown error',
-                        errorDetail: 'An unexpected error occurred during publishing. This may be a network issue — check your connection and try again.',
+                        errorDetail: 'Publishing failed unexpectedly. Check your connection and try again.',
                     };
                 } finally {
                     // Runs on every exit path (success, failure, early return) so
@@ -1049,7 +1054,6 @@ export function PublishWizard({
                             <CampaignConfigStep
                                 settings={settings}
                                 onUpdate={updateSettings}
-                                selectedAds={selectedAds}
                             />
                         )}
                         {currentStep === 3 && (

@@ -97,13 +97,13 @@ export function ConnectionStatus({ onAllConnected }: ConnectionStatusProps) {
         }
 
         checkMeta();
-    }, [user]);
+    }, [user, updateService]);
 
-    // Notify parent when all connected
+    // Notify parent when the all-connected state changes (not on every render)
+    const allConnected = services.every(s => s.status === 'connected');
     useEffect(() => {
-        const allConnected = services.every(s => s.status === 'connected');
         onAllConnected?.(allConnected);
-    }, [services, onAllConnected]);
+    }, [allConnected, onAllConnected]);
 
     const handleMetaReconnect = async () => {
         try {
@@ -125,7 +125,6 @@ export function ConnectionStatus({ onAllConnected }: ConnectionStatusProps) {
         }
     };
 
-    const allConnected = services.every(s => s.status === 'connected');
     const hasIssues = services.some(s => s.status === 'disconnected' || s.status === 'error');
 
     return (

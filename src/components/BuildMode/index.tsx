@@ -1,22 +1,26 @@
 'use client';
 
-import React, { useState, useCallback, useMemo } from 'react';
-import { Campaign, AdRow, CopyItem, AdRowSlots, SlotItem, BrainConfig, Asset, GlobalPromptSettings, CampaignBrief, normalizeHeadlineSlots } from '@/types';
+import React, { useState, useCallback, useMemo, useRef, useLayoutEffect } from 'react';
+import { Campaign, AdRow, CopyItem, AdRowSlots, SlotItem, Asset, GlobalPromptSettings, CampaignBrief, normalizeHeadlineSlots } from '@/types';
 import { DndProvider } from '@/lib/dnd';
-import { Brain } from './Brain';
-import { Palette } from './Palette';
+import { CopywriterPanel, type CopywriterHandle } from './Copywriter';
+import { CampaignContextButton, CampaignContextPanel } from './CampaignContext';
+import { Palette, type CopyView, type PaletteTab } from './Palette';
+import type { CopyTarget, UseCopyResult } from './CopyTarget';
 import { AssemblyLine } from './AssemblyLine';
 import { AssetLibrary } from './AssetLibrary';
 import { AdNamer } from './AdNamer';
-import { FolderOpen, Brain as BrainIcon, Settings2, Tag } from 'lucide-react';
+import { FolderOpen, Settings2, Tag } from 'lucide-react';
 import { useMetaConnection } from '@/hooks';
 import { useAuth } from '@/components/AuthContext';
 import { loadFolderAssets } from '@/lib/google';
+import { findSlotFor, rowLabel } from '@/lib/ai/rowContext';
+import { countPhrase, pickTopCopy } from '@/lib/ai/prompts';
+import { aggregateTopCopy } from '@/lib/meta/topCopy';
+import { copyUsage } from '@/lib/activePalette';
 
 // Default brief for legacy campaigns that don't have the brief property
 const DEFAULT_BRIEF: CampaignBrief = {
-    productId: null,
-    targetAudience: '',
     keyMessages: '',
     driveFolderUrl: null,
 };
@@ -26,54 +30,50 @@ interface BuildModeProps {
     campaign: Campaign;
     onUpdateCampaign: (updates: Partial<Campaign>, actionDescription?: string) => void;
     globalSettings: GlobalPromptSettings;
-    onUpdateGlobalSettings: (updates: Partial<GlobalPromptSettings>) => Promise<void>;
+    /** Other campaigns, for "Copy context from campaign" */
+    otherCampaigns: { id: string; name: string; brief?: CampaignBrief }[];
 }
 
-type TabId = 'assets' | 'brain' | 'assembly' | 'namer';
+type TabId = 'assets' | 'assembly' | 'namer';
+
+// Split-screen palette is a per-browser preference
+const WIDE_PALETTE_KEY = 'mco.paletteWide';
+function readWidePalette(): boolean {
+    try { return typeof window !== 'undefined' && window.localStorage.getItem(WIDE_PALETTE_KEY) === '1'; } catch { return false; }
+}
 
 // Tab configuration
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
     { id: 'assets', label: 'Assets', icon: <FolderOpen size={16} /> },
-    { id: 'brain', label: 'AI Co-Writer', icon: <BrainIcon size={16} /> },
     { id: 'assembly', label: 'Assembly', icon: <Settings2 size={16} /> },
     { id: 'namer', label: 'Ad Namer', icon: <Tag size={16} /> },
 ];
-
-// Calculate how many times each Active Palette item is used in rows
-function calculateUsageCounts(rows: AdRow[], activeItems: CopyItem[]): Map<string, number> {
-    const counts = new Map<string, number>();
-
-    // Initialize all active items to 0
-    activeItems.forEach(item => counts.set(item.id, 0));
-
-    // Count usage in all rows
-    rows.forEach(row => {
-        // Carousels publish only Primary Text 1 — copy parked in hidden
-        // PT slots 2–5 shouldn't count as "used"
-        const primaryTexts = row.adType === 'carousel'
-            ? row.slots.primaryTexts.slice(0, 1)
-            : row.slots.primaryTexts;
-        const allSlots = [...primaryTexts, ...row.slots.headlines];
-        allSlots.forEach(slot => {
-            if (slot) {
-                const masterId = slot.masterItem.id;
-                if (counts.has(masterId)) {
-                    counts.set(masterId, (counts.get(masterId) || 0) + 1);
-                }
-            }
-        });
-    });
-
-    return counts;
-}
 
 function BuildModeContent({
     campaign,
     onUpdateCampaign,
     globalSettings,
+    otherCampaigns,
 }: BuildModeProps) {
     const [activeTab, setActiveTab] = useState<TabId>('assembly');
+    const [isContextOpen, setIsContextOpen] = useState(false);
+    // The copywriter's "Context" links open it on the Assembly Line.
+    const openContext = useCallback(() => {
+        setActiveTab('assembly');
+        setIsContextOpen(true);
+    }, []);
     const [isPaletteCollapsed, setIsPaletteCollapsed] = useState(false);
+    const [paletteTab, setPaletteTab] = useState<PaletteTab>('copy');
+    const [copyView, setCopyView] = useState<CopyView>('top');
+    // The selected ad: Use fills it and the copywriter writes for it. It follows the row you work in.
+    const [copyTargetId, setCopyTargetId] = useState<string | null>(campaign.rows[0]?.id ?? null);
+    const [isPaletteWide, setIsPaletteWide] = useState(readWidePalette);
+    const toggleWidePalette = useCallback(() => {
+        setIsPaletteWide(wide => {
+            try { window.localStorage.setItem(WIDE_PALETTE_KEY, wide ? '0' : '1'); } catch { /* private mode */ }
+            return !wide;
+        });
+    }, []);
     const [driveAssets, setDriveAssets] = useState<Asset[]>([]);
     const [isImportingFromMeta, setIsImportingFromMeta] = useState(false);
     const [isAssetsLoading, setIsAssetsLoading] = useState(false);
@@ -85,9 +85,9 @@ function BuildModeContent({
     // Safe brief reference - handle legacy campaigns without brief
     const safeBrief: CampaignBrief = campaign.brief ?? DEFAULT_BRIEF;
 
-    // Calculate usage counts for Active Palette items
-    const usageCounts = useMemo(() =>
-        calculateUsageCounts(campaign.rows, campaign.palette.active),
+    // Which ads use each Active Palette item
+    const usage = useMemo(() =>
+        copyUsage(campaign.rows, campaign.palette.active),
         [campaign.rows, campaign.palette.active]
     );
 
@@ -95,11 +95,23 @@ function BuildModeContent({
     // Campaign Brief Handlers
     // ========================================
 
+    // Latest campaign for async callbacks (page reads finish after more edits).
+    // A layout effect, so it's current before the rows' own effects run (an ad
+    // name saving itself reads it in the same commit as the change behind it).
+    const campaignRef = useRef(campaign);
+    useLayoutEffect(() => { campaignRef.current = campaign; }, [campaign]);
+
     const handleBriefChange = useCallback((updates: Partial<CampaignBrief>) => {
         onUpdateCampaign({
-            brief: { ...safeBrief, ...updates },
+            brief: { ...(campaignRef.current.brief ?? DEFAULT_BRIEF), ...updates },
         });
-    }, [safeBrief, onUpdateCampaign]);
+    }, [onUpdateCampaign]);
+
+    const updateBrief = useCallback((update: (brief: CampaignBrief) => CampaignBrief) => {
+        const next = update(campaignRef.current.brief ?? DEFAULT_BRIEF);
+        campaignRef.current = { ...campaignRef.current, brief: next };
+        onUpdateCampaign({ brief: next });
+    }, [onUpdateCampaign]);
 
     // Drive folder URL handler
     const handleDriveFolderUrlChange = useCallback((url: string | null) => {
@@ -167,23 +179,6 @@ function BuildModeContent({
         }, `Add ${newItems.length} to Active Palette`);
     }, [campaign.palette, onUpdateCampaign]);
 
-    // Add manual copy to palette
-    const handleAddManualCopy = useCallback((text: string, type: 'headline' | 'primary_text') => {
-        const newItem: CopyItem = {
-            id: `manual-${Date.now()}`,
-            text,
-            type,
-            source: 'manual',
-            createdAt: new Date(),
-        };
-        onUpdateCampaign({
-            palette: {
-                ...campaign.palette,
-                active: [...campaign.palette.active, newItem],
-            },
-        }, 'Add manual copy');
-    }, [campaign.palette, onUpdateCampaign]);
-
     const handleRemoveFromActive = useCallback((id: string) => {
         onUpdateCampaign({
             palette: {
@@ -193,150 +188,64 @@ function BuildModeContent({
         }, 'Remove from Active Palette');
     }, [campaign.palette, onUpdateCampaign]);
 
-    // Import top performers from Meta
+    const handleRemoveManyFromActive = useCallback((ids: string[]) => {
+        const drop = new Set(ids);
+        onUpdateCampaign({
+            palette: {
+                ...campaign.palette,
+                active: campaign.palette.active.filter(item => !drop.has(item.id)),
+            },
+        }, `Remove ${ids.length} from Active Palette`);
+    }, [campaign.palette, onUpdateCampaign]);
+
+    // Import top performers from Meta: the copy behind most of the spend (see topCopy.ts)
+    const [importNote, setImportNote] = useState<{ ok: boolean; message: string } | null>(null);
     const handleImportFromMeta = useCallback(async (productFilter?: string) => {
         setIsImportingFromMeta(true);
+        setImportNote(null);
         try {
-            // Fetch more ads to get a good sample, then we'll take top 25%
-            const topPerformers = await fetchTopPerformers({ datePreset: 'last_90d', limit: 200 });
-
-            // Apply product filter if provided (case-insensitive match on ad name)
-            const filteredPerformers = productFilter
-                ? topPerformers.filter(p =>
-                    p.adName.toLowerCase().includes(productFilter.toLowerCase()) ||
-                    p.campaignName.toLowerCase().includes(productFilter.toLowerCase())
-                )
-                : topPerformers;
-
-            if (filteredPerformers.length === 0) {
-                console.log(`No ads found matching filter: ${productFilter}`);
+            const ads = await fetchTopPerformers({ datePreset: 'last_90d', limit: 200 });
+            const filter = productFilter?.trim();
+            const { items, matchedAds } = aggregateTopCopy(ads, filter);
+            if (matchedAds === 0 || items.length === 0) {
+                setImportNote({ ok: false, message: filter ? `No ads with spend in the last 90 days match "${filter}".` : 'No ads with spend in the last 90 days.' });
                 return;
             }
-
-            // Aggregate metrics by unique copy text
-            // Key: normalized text, Value: aggregated metrics
-            interface AggregatedCopy {
-                text: string;
-                type: 'headline' | 'primary_text';
-                totalSpend: number;
-                totalImpressions: number;
-                totalClicks: number;
-                adCount: number;
-                roasValues: number[];
-                adNames: Set<string>;  // Track which ads this copy appeared in
-            }
-
-            const primaryTextMap = new Map<string, AggregatedCopy>();
-            const headlineMap = new Map<string, AggregatedCopy>();
-
-            filteredPerformers.forEach((performer) => {
-                // Aggregate primary texts
-                if (performer.primaryText) {
-                    const key = performer.primaryText.trim();
-                    const existing = primaryTextMap.get(key);
-                    if (existing) {
-                        existing.totalSpend += performer.spend;
-                        existing.totalImpressions += performer.impressions;
-                        existing.totalClicks += performer.clicks;
-                        existing.adCount += 1;
-                        if (performer.roas) existing.roasValues.push(performer.roas);
-                        existing.adNames.add(performer.adName);
-                    } else {
-                        primaryTextMap.set(key, {
-                            text: performer.primaryText,
-                            type: 'primary_text',
-                            totalSpend: performer.spend,
-                            totalImpressions: performer.impressions,
-                            totalClicks: performer.clicks,
-                            adCount: 1,
-                            roasValues: performer.roas ? [performer.roas] : [],
-                            adNames: new Set([performer.adName]),
-                        });
-                    }
-                }
-
-                // Aggregate headlines
-                if (performer.headline) {
-                    const key = performer.headline.trim();
-                    const existing = headlineMap.get(key);
-                    if (existing) {
-                        existing.totalSpend += performer.spend;
-                        existing.totalImpressions += performer.impressions;
-                        existing.totalClicks += performer.clicks;
-                        existing.adCount += 1;
-                        if (performer.roas) existing.roasValues.push(performer.roas);
-                        existing.adNames.add(performer.adName);
-                    } else {
-                        headlineMap.set(key, {
-                            text: performer.headline,
-                            type: 'headline',
-                            totalSpend: performer.spend,
-                            totalImpressions: performer.impressions,
-                            totalClicks: performer.clicks,
-                            adCount: 1,
-                            roasValues: performer.roas ? [performer.roas] : [],
-                            adNames: new Set([performer.adName]),
-                        });
-                    }
-                }
-            });
-
-            // Convert maps to arrays and sort by total spend
-            const allAggregated = [
-                ...Array.from(primaryTextMap.values()),
-                ...Array.from(headlineMap.values()),
-            ].sort((a, b) => b.totalSpend - a.totalSpend);
-
-            // Take top 50%
-            const top50PercentCount = Math.max(1, Math.ceil(allAggregated.length * 0.50));
-            const topItems = allAggregated.slice(0, top50PercentCount);
-
-            // Convert to CopyItem format
-            const newHistoricalItems: CopyItem[] = topItems.map((item, index) => {
-                // Calculate weighted average CTR
-                const ctr = item.totalImpressions > 0
-                    ? (item.totalClicks / item.totalImpressions) * 100
-                    : 0;
-
-                // Calculate average ROAS
-                const avgRoas = item.roasValues.length > 0
-                    ? item.roasValues.reduce((a, b) => a + b, 0) / item.roasValues.length
-                    : undefined;
-
-                return {
-                    id: `meta-${item.type === 'headline' ? 'h' : 'pt'}-${index}-${Date.now()}`,
-                    text: item.text,
-                    type: item.type,
+            const now = Date.now();
+            const current = campaignRef.current;
+            const keyOf = (i: { type: string; text: string }) => `${i.type}:${i.text.trim().toLowerCase()}`;
+            const existing = new Set(current.palette.historical.map(keyOf));
+            const fresh: CopyItem[] = items
+                .filter(i => !existing.has(keyOf(i)))
+                .map((i, index) => ({
+                    id: `meta-${i.type === 'headline' ? 'h' : 'pt'}-${index}-${now}`,
+                    text: i.text,
+                    type: i.type,
                     source: 'historical' as const,
-                    metrics: {
-                        spend: item.totalSpend,
-                        ctr: ctr,
-                        roas: avgRoas,
-                    },
-                    sourceAdNames: Array.from(item.adNames),  // Store ad names for filtering
+                    metrics: { spend: i.spend, ctr: i.ctr, roas: i.roas },
+                    sourceAdNames: i.adNames,
                     createdAt: new Date(),
-                };
-            });
-
-            // Deduplicate against existing items
-            const existingTexts = new Set(campaign.palette.historical.map(i => i.text.trim()));
-            const uniqueNewItems = newHistoricalItems.filter(item => !existingTexts.has(item.text.trim()));
-
-            if (uniqueNewItems.length > 0) {
-                const filterNote = productFilter ? ` (filtered by "${productFilter}")` : '';
-                onUpdateCampaign({
-                    palette: {
-                        ...campaign.palette,
-                        historical: [...uniqueNewItems, ...campaign.palette.historical],
-                    },
-                }, `Imported ${uniqueNewItems.length} top performers from Meta (top 50% by spend)${filterNote}`);
+                }));
+            const count = (type: CopyItem['type']) => {
+                const n = fresh.filter(i => i.type === type).length;
+                return `${n} ${type === 'headline' ? (n === 1 ? 'headline' : 'headlines') : (n === 1 ? 'primary text' : 'primary texts')}`;
+            };
+            const from = filter ? ` from "${filter}" ads` : '';
+            if (fresh.length === 0) {
+                setImportNote({ ok: true, message: `Already up to date${from}.` });
+                return;
             }
+            onUpdateCampaign({
+                palette: { ...current.palette, historical: [...fresh, ...current.palette.historical] },
+            }, `Import ${fresh.length} top performers from Meta`);
+            setImportNote({ ok: true, message: `Added ${count('headline')} and ${count('primary_text')}${from}.` });
         } catch (error) {
             console.error('Failed to import from Meta:', error);
+            setImportNote({ ok: false, message: `Couldn't import from Meta: ${error instanceof Error ? error.message : 'unknown error'}` });
         } finally {
             setIsImportingFromMeta(false);
         }
-    }, [fetchTopPerformers, campaign.palette, onUpdateCampaign]);
+    }, [fetchTopPerformers, onUpdateCampaign]);
 
     // Clear the historical palette (does not affect active palette)
     const handleClearHistorical = useCallback(() => {
@@ -417,13 +326,16 @@ function BuildModeContent({
     // Assembly Line Handlers
     // ========================================
 
+    // Builds on the latest rows (campaignRef), so updates from several rows in
+    // one tick, such as ad names saving themselves, don't overwrite each other.
     const handleUpdateRow = useCallback((rowId: string, updates: Partial<AdRow>) => {
-        onUpdateCampaign({
-            rows: campaign.rows.map(row =>
-                row.id === rowId ? { ...row, ...updates, updatedAt: new Date() } : row
-            ),
-        }, 'Update row');
-    }, [campaign.rows, onUpdateCampaign]);
+        const current = campaignRef.current;
+        const rows = current.rows.map(row =>
+            row.id === rowId ? { ...row, ...updates, updatedAt: new Date() } : row
+        );
+        campaignRef.current = { ...current, rows };
+        onUpdateCampaign({ rows }, 'Update row');
+    }, [onUpdateCampaign]);
 
     const handleDeleteRow = useCallback((rowId: string) => {
         onUpdateCampaign({
@@ -444,6 +356,7 @@ function BuildModeContent({
             const newRows = [...campaign.rows];
             newRows.splice(index + 1, 0, newRow);
             onUpdateCampaign({ rows: newRows }, 'Duplicate row');
+            setCopyTargetId(newRow.id);
         }
     }, [campaign.rows, onUpdateCampaign]);
 
@@ -467,6 +380,7 @@ function BuildModeContent({
             const newRows = [...campaign.rows];
             newRows.splice(index + 1, 0, newRow);
             onUpdateCampaign({ rows: newRows }, 'Duplicate structure');
+            setCopyTargetId(newRow.id);
         }
     }, [campaign.rows, onUpdateCampaign]);
 
@@ -485,6 +399,7 @@ function BuildModeContent({
             updatedAt: new Date(),
         };
         onUpdateCampaign({ rows: [...campaign.rows, newRow] }, 'Add row');
+        setCopyTargetId(newRow.id);
     }, [campaign.rows, onUpdateCampaign]);
 
     // Apply to All Rows - applies a single slot item to the same position in all rows
@@ -521,42 +436,112 @@ function BuildModeContent({
     }, [campaign.rows, onUpdateCampaign]);
 
     // ========================================
-    // Brain Config (Runtime session state)
+    // Copywriter
     // ========================================
 
-    // Session-level state for Brain controls (not persisted to campaign)
-    const [sessionTemperature, setSessionTemperature] = useState(globalSettings.defaultTemperature);
-    const [sessionModifiers, setSessionModifiers] = useState<string[]>([]);
-    const [sessionPersonaId, setSessionPersonaId] = useState<string | undefined>(undefined);
+    const copywriterRef = useRef<CopywriterHandle>(null);
+    // Keep the target on a real row (rows get added, deleted, reordered)
+    const effectiveTargetId = campaign.rows.some(r => r.id === copyTargetId) ? copyTargetId : campaign.rows[0]?.id ?? null;
 
-    // Create a runtime BrainConfig from campaign brief + session state
-    const brainConfig: BrainConfig = useMemo(() => ({
-        context: safeBrief.keyMessages,
-        temperature: sessionTemperature,
-        activeModifiers: sessionModifiers,
-        selectedProductId: safeBrief.productId || undefined,
-        selectedPersonaId: sessionPersonaId,
-    }), [safeBrief, sessionTemperature, sessionModifiers, sessionPersonaId]);
+    // The copywriter lives in the Palette: a row's sparkle opens it on the Copywriter tab.
+    const showCopywriter = useCallback(() => {
+        setIsPaletteCollapsed(false);
+        setPaletteTab('copy');
+        setCopyView('write');
+    }, []);
 
-    const handleBrainConfigChange = useCallback((updates: Partial<BrainConfig>) => {
-        // Update session state for temperature, modifiers, and persona
-        if (updates.temperature !== undefined) {
-            setSessionTemperature(updates.temperature);
+    const handleAimCopywriter = useCallback((rowId: string) => {
+        setCopyTargetId(rowId);
+        showCopywriter();
+        copywriterRef.current?.open();
+    }, [showCopywriter]);
+
+    // Top Performers are shared context for every row (part of the cached prefix)
+    const topCopy = useMemo(() => pickTopCopy(campaign.palette.historical.map(i => ({
+        type: i.type, text: i.text, spend: i.metrics?.spend, ctr: i.metrics?.ctr,
+    }))), [campaign.palette.historical]);
+
+    const handleRiff = useCallback((item: CopyItem) => {
+        showCopywriter();
+        copywriterRef.current?.riff(item);
+    }, [showCopywriter]);
+
+    const handleTargetRow = useCallback((rowId: string) => {
+        setCopyTargetId(rowId);
+        document.getElementById(`ad-row-${rowId}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, []);
+
+    // Drop chosen copy into the row's next empty slot, and into the Active Palette.
+    const handleUseCopy = useCallback((rowId: string, item: CopyItem): UseCopyResult => {
+        const current = campaignRef.current;
+        const index = current.rows.findIndex(r => r.id === rowId);
+        if (index === -1) return { ok: false, message: 'That row no longer exists' };
+        const row = current.rows[index];
+        const place = findSlotFor(row, item.type, item.text);
+        const column = item.type === 'headline' ? 'Headline' : 'Primary text';
+        if (!place.ok) {
+            return {
+                ok: false,
+                message: place.reason === 'duplicate'
+                    ? `Already in ${rowLabel(row, index)}`
+                    : `${column} slots in ${rowLabel(row, index)} are full. Drag it onto one to replace it.`,
+            };
         }
-        if (updates.activeModifiers !== undefined) {
-            setSessionModifiers(updates.activeModifiers);
+        const norm = (t: string) => t.trim().toLowerCase();
+        const existing = current.palette.active.find(a => a.type === item.type && norm(a.text) === norm(item.text));
+        // New to Active: keep where it came from (top performer, AI); a top performer gets its own id, as when dragged in.
+        const master: CopyItem = existing ?? {
+            ...item,
+            id: item.source === 'historical' ? `${item.id}-copy-${Date.now()}` : item.id,
+            source: item.source ?? 'ai_generated',
+            createdAt: new Date(),
+        };
+        const key = item.type === 'headline' ? 'headlines' : 'primaryTexts';
+        const nextSlots = [...row.slots[key]];
+        nextSlots[place.slotIndex] = { masterItem: master, isCustomized: false };
+        const updates: Partial<Campaign> = {
+            rows: current.rows.map(r => (r.id === rowId
+                ? { ...r, slots: { ...r.slots, [key]: nextSlots }, updatedAt: new Date() }
+                : r)),
+            palette: existing ? current.palette : { ...current.palette, active: [...current.palette.active, master] },
+        };
+        campaignRef.current = { ...current, ...updates } as Campaign;
+        onUpdateCampaign(updates, 'Use copy');
+        return { ok: true, message: `Added to ${rowLabel(row, index)} · ${column} ${place.slotIndex + 1}` };
+    }, [onUpdateCampaign]);
+
+    // Fill this ad: each piece goes into the row's next empty slot of its type, in
+    // order, until it has what was asked for (copy already in the ad is skipped).
+    const handleFill = useCallback((rowId: string, items: CopyItem[], counts: { headlines: number; primaryTexts: number }): UseCopyResult => {
+        const placed = { headlines: 0, primaryTexts: 0 };
+        for (const item of items) {
+            const key = item.type === 'headline' ? 'headlines' : 'primaryTexts';
+            if (placed[key] >= counts[key]) continue;
+            if (handleUseCopy(rowId, item).ok) placed[key]++;
         }
-        if (updates.selectedPersonaId !== undefined) {
-            setSessionPersonaId(updates.selectedPersonaId);
+        const rows = campaignRef.current.rows;
+        const index = rows.findIndex(r => r.id === rowId);
+        const label = index >= 0 ? rowLabel(rows[index], index) : 'the ad';
+        if (placed.headlines + placed.primaryTexts === 0) {
+            return { ok: false, message: `Nothing went into ${label}: its slots are full or already hold this copy.` };
         }
-        // Persist context and product selection to campaign brief
-        if (updates.context !== undefined) {
-            handleBriefChange({ keyMessages: updates.context });
-        }
-        if (updates.selectedProductId !== undefined) {
-            handleBriefChange({ productId: updates.selectedProductId || null });
-        }
-    }, [handleBriefChange]);
+        return { ok: true, message: `Filled ${countPhrase(placed)} in ${label}.` };
+    }, [handleUseCopy]);
+
+    // The selected ad as every copy card sees it: Use, "In ad" and "Full" all come from here.
+    const copyTarget = useMemo<CopyTarget>(() => {
+        const index = campaign.rows.findIndex(r => r.id === effectiveTargetId);
+        const row = index >= 0 ? campaign.rows[index] : null;
+        return {
+            label: row ? rowLabel(row, index) : null,
+            placeFor: item => {
+                if (!row) return null;
+                const place = findSlotFor(row, item.type, item.text);
+                return place.ok ? 'free' : place.reason === 'duplicate' ? 'in' : 'full';
+            },
+            use: item => (row ? handleUseCopy(row.id, item) : { ok: false, message: 'Add an ad first' }),
+        };
+    }, [campaign.rows, effectiveTargetId, handleUseCopy]);
 
     // ========================================
     // Render
@@ -598,17 +583,6 @@ function BuildModeContent({
                         />
                     </div>
 
-                    <div className="h-full" style={{ display: activeTab === 'brain' ? 'block' : 'none' }}>
-                        <Brain
-                            config={brainConfig}
-                            onConfigChange={handleBrainConfigChange}
-                            onAddToActive={handleAddToActive}
-                            onRemoveFromActive={handleRemoveFromActive}
-                            globalSettings={globalSettings}
-                            campaignBrief={safeBrief}
-                        />
-                    </div>
-
                     <div className="h-full" style={{ display: activeTab === 'assembly' ? 'block' : 'none' }}>
                         <AssemblyLine
                             rows={campaign.rows}
@@ -625,6 +599,25 @@ function BuildModeContent({
                             onRefreshAssets={handleRefreshAssets}
                             hasFolderConfigured={!!safeBrief.driveFolderUrl}
                             isAssetsLoading={isAssetsLoading}
+                            copyTargetRowId={effectiveTargetId}
+                            onAimCopywriter={handleAimCopywriter}
+                            onSelectRow={setCopyTargetId}
+                            contextButton={
+                                <CampaignContextButton
+                                    brief={safeBrief}
+                                    open={isContextOpen}
+                                    onToggle={() => setIsContextOpen(o => !o)}
+                                />
+                            }
+                            contextPanel={
+                                <CampaignContextPanel
+                                    brief={safeBrief}
+                                    onBriefChange={updateBrief}
+                                    otherCampaigns={otherCampaigns}
+                                    open={isContextOpen}
+                                    onClose={() => setIsContextOpen(false)}
+                                />
+                            }
                         />
                     </div>
 
@@ -633,21 +626,48 @@ function BuildModeContent({
                     </div>
                 </div>
 
-                {/* Palette (Always Visible) */}
+                {/* Palette (Always Visible): copy library and the copywriter */}
                 <Palette
                     historicalItems={campaign.palette.historical}
                     activeItems={campaign.palette.active}
-                    onAddToActive={handleAddToActive}
                     onRemoveFromActive={handleRemoveFromActive}
+                    onRemoveManyFromActive={handleRemoveManyFromActive}
                     onEditActiveItem={handleEditActiveItem}
-                    onAddManualCopy={handleAddManualCopy}
                     isCollapsed={isPaletteCollapsed}
                     onToggleCollapse={() => setIsPaletteCollapsed(!isPaletteCollapsed)}
-                    usageCounts={usageCounts}
+                    usage={usage}
                     onImportFromMeta={handleImportFromMeta}
                     isImportingFromMeta={isImportingFromMeta}
+                    importNote={importNote}
+                    onDismissImportNote={() => setImportNote(null)}
                     metaConnected={metaConnected}
                     onClearHistorical={handleClearHistorical}
+                    onRiff={handleRiff}
+                    rows={campaign.rows}
+                    targetRowId={effectiveTargetId}
+                    onTargetRow={handleTargetRow}
+                    target={copyTarget}
+                    tab={paletteTab}
+                    onTabChange={setPaletteTab}
+                    copyView={copyView}
+                    onCopyViewChange={setCopyView}
+                    isWide={isPaletteWide}
+                    onToggleWide={toggleWidePalette}
+                    copywriter={
+                        <CopywriterPanel
+                            ref={copywriterRef}
+                            rows={campaign.rows}
+                            targetRowId={effectiveTargetId}
+                            brief={safeBrief}
+                            onBriefChange={updateBrief}
+                            globalSettings={globalSettings}
+                            target={copyTarget}
+                            onOpenContext={openContext}
+                            topCopy={topCopy}
+                            visible={!isPaletteCollapsed && paletteTab === 'copy' && copyView === 'write'}
+                            onFill={handleFill}
+                        />
+                    }
                 />
             </div>
         </div>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/server/verifyAuth';
+import { isMetaId } from '@/lib/server/ids';
 import { requireMetaToken } from '@/lib/server/metaAuth';
 import { logger, serializeError, serializeMetaError } from '@/lib/logger';
 import crypto from 'crypto';
@@ -14,6 +15,9 @@ import {
 } from '@/lib/meta/multiMedia';
 
 // Advantage+ creative enhancement toggles supported by degrees_of_freedom_spec
+/** Every type the app publishes. Flexible (creative_asset_groups_spec) was retired in Nov 2026. */
+const PUBLISHABLE_AD_TYPES: unknown[] = ['multi_media', 'carousel', 'single_image', 'single_video'];
+
 const ENHANCEMENT_KEYS = [
     'enhance_cta',
     'adapt_to_placement',
@@ -133,7 +137,7 @@ async function waitForVideoReady(
  *   imageHashes?: string[],    // Pre-uploaded image hashes
  *   videoIds?: string[],       // Pre-uploaded video IDs
  *   urlParameters?: string,    // UTM tracking params
- *   status: 'PAUSED' | 'ACTIVE',
+ *   (status is always PAUSED — set here, never taken from the request)
  * }
  */
 export async function POST(request: NextRequest) {
@@ -157,14 +161,17 @@ export async function POST(request: NextRequest) {
             imageHashes = [],
             videoIds = [],
             urlParameters = '',
-            status = 'PAUSED',
-            adType = 'flexible', // 'flexible' | 'single_image' | 'single_video' | 'carousel' | 'multi_media'
+            adType, // 'multi_media' | 'carousel' | 'single_image' | 'single_video'
             cards = [], // Ordered carousel cards: [{ type, hash?, videoId? }] — pairs with headlines by index
             media = [], // Ordered multi-media items: [{ type, name?, hash?, videoId?, width?, height?, stack? }] — [0] is primary
             pixelId = '', // Pixel ID for conversion tracking
             enhancements = {}, // Creative enhancement toggles
             instagramActorId = '', // Instagram Business Account ID
         } = body;
+
+        // Every ad is created PAUSED, whatever the request says: a person turns
+        // ads on in Ads Manager (docs/OPERATIONS.md → Decisions already made).
+        const status = 'PAUSED';
 
         // Validate required fields
         if (!adAccountId || !adSetId || !pageId) {
@@ -174,9 +181,34 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        // Ids that go into Graph URL paths must look like Meta ids (see ids.ts).
+        const mediaVideoIds = [...(Array.isArray(cards) ? cards : []), ...(Array.isArray(media) ? media : [])]
+            .map((item: { videoId?: unknown }) => item?.videoId)
+            .filter(id => id !== undefined && id !== null && id !== '');
+        if (
+            !isMetaId(adAccountId) || !isMetaId(adSetId)
+            || !Array.isArray(videoIds) || ![...videoIds, ...mediaVideoIds].every(isMetaId)
+        ) {
+            return NextResponse.json(
+                { error: 'adAccountId, adSetId or a video id is not a valid Meta id' },
+                { status: 400 }
+            );
+        }
+
         if (!adName || !destinationUrl) {
             return NextResponse.json(
                 { error: 'adName and destinationUrl are required' },
+                { status: 400 }
+            );
+        }
+
+        if (!PUBLISHABLE_AD_TYPES.includes(adType)) {
+            return NextResponse.json(
+                {
+                    error: adType === 'flexible'
+                        ? 'Flexible ads were retired. Switch the ad to Multi-Media in Build and publish again.'
+                        : 'The ad needs a type: Multi-Media, Carousel, Single Image or Single Video',
+                },
                 { status: 400 }
             );
         }
@@ -236,10 +268,10 @@ export async function POST(request: NextRequest) {
         logger.debug('publish', 'Ad info', { sid, adType, urlParameters });
 
         // Verify ALL referenced videos have finished processing before creating
-        // the ad — a still-processing video can fail the whole creative, and
-        // flexible ads routinely carry several. Polls run in parallel, so the
-        // wait is one polling window regardless of video count. The lead
-        // video's thumbnail is captured for video_data creatives.
+        // the ad — a still-processing video can fail the whole creative. Polls
+        // run in parallel, so the wait is one polling window regardless of
+        // video count. The lead video's thumbnail is captured for video_data
+        // creatives.
         // (Carousel and multi-media handle their own per-item video readiness below.)
         let videoThumbnailUrl: string | null = null;
         const firstVideoId = videoIds[0];
@@ -281,7 +313,7 @@ export async function POST(request: NextRequest) {
         // multi_media → inline creative with media_sourcing_spec (direct ad creation)
         // carousel → object_story_spec.link_data.child_attachments (two-step)
         // single_image / single_video → asset_feed_spec + AdCreative (two-step)
-        // flexible → creative_asset_groups_spec (direct ad creation, unchanged)
+        // (Flexible's creative_asset_groups_spec was retired in Nov 2026.)
 
         const isSingleAd = adType === 'single_image' || adType === 'single_video';
 
@@ -832,141 +864,10 @@ export async function POST(request: NextRequest) {
                 adName,
             });
 
-        } else {
-            // === FLEXIBLE AD: creative_asset_groups_spec (current path, unchanged) ===
-
-            // Build texts array
-            const texts: Array<{ text: string, text_type: string }> = [];
-            (primaryTexts as string[]).slice(0, 5).forEach((text: string) => {
-                texts.push({ text, text_type: 'primary_text' });
-            });
-            (headlines as string[]).slice(0, 5).forEach((text: string) => {
-                texts.push({ text, text_type: 'headline' });
-            });
-
-            // Build the asset group
-            const assetGroup: Record<string, unknown> = {
-                texts,
-                call_to_action: {
-                    type: callToAction,
-                    value: { link: destinationUrl },
-                },
-            };
-
-            // Add images
-            if (imageHashes.length > 0) {
-                assetGroup.images = (imageHashes as string[]).slice(0, 10).map((hash: string) => ({ hash }));
-            }
-
-            // Add videos
-            if (videoIds.length > 0) {
-                assetGroup.videos = (videoIds as string[]).slice(0, 10).map((id: string) => ({ video_id: id }));
-            }
-
-            const creativeAssetGroupsSpec = { groups: [assetGroup] };
-
-            // Build creative object with object_story_spec (lead asset reference)
-            const creativeObject: Record<string, unknown> = {
-                name: `${adName} - Creative`,
-                object_story_spec: {
-                    page_id: pageId,
-                    ...(instagramActorId && { instagram_user_id: instagramActorId }),
-                },
-                ...(instagramActorId && { instagram_user_id: instagramActorId }),
-            };
-
-            const objectStorySpec = creativeObject.object_story_spec as Record<string, unknown>;
-
-            if (firstVideoId && !firstImageHash) {
-                objectStorySpec.video_data = {
-                    video_id: firstVideoId,
-                    message: primaryTexts[0] || adName,
-                    ...(videoThumbnailUrl && { image_url: videoThumbnailUrl }),
-                    call_to_action: {
-                        type: callToAction,
-                        value: { link: destinationUrl },
-                    },
-                };
-            } else {
-                objectStorySpec.link_data = {
-                    link: destinationUrl,
-                    ...(firstImageHash && { image_hash: firstImageHash }),
-                    call_to_action: {
-                        type: callToAction,
-                        value: { link: destinationUrl },
-                    },
-                };
-            }
-
-            // Build degrees_of_freedom_spec for Advantage+ creative enhancements
-            const creativeFeatures = buildCreativeFeatures(enhancements, videoIds.length > 0);
-
-            if (Object.keys(creativeFeatures).length > 0) {
-                creativeObject.degrees_of_freedom_spec = {
-                    creative_features_spec: creativeFeatures,
-                };
-            }
-
-            // Add url_tags for tracking parameters
-            if (urlParameters) {
-                creativeObject.url_tags = urlParameters;
-            }
-
-            const adPayload = {
-                name: adName,
-                adset_id: adSetId,
-                status: status,
-                creative: JSON.stringify(creativeObject),
-                creative_asset_groups_spec: JSON.stringify(creativeAssetGroupsSpec),
-                ...(pixelId ? { tracking_specs: JSON.stringify([{ 'action.type': ['offsite_conversion'], fb_pixel: [pixelId] }]) } : {}),
-            };
-
-            logger.info('publish', 'Creating ad via creative_asset_groups_spec (flexible)', {
-                sid,
-                adType,
-                imageCount: imageHashes.length,
-                videoCount: videoIds.length,
-                primaryTextsCount: primaryTexts.length,
-                headlinesCount: headlines.length,
-                instagramActorId: instagramActorId || '(none)',
-            });
-
-            const adResponse = await fetch(
-                `${GRAPH_API_BASE}/${adAccountId}/ads`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({
-                        access_token: accessToken,
-                        ...adPayload,
-                    }),
-                }
-            );
-
-            const adData = await adResponse.json();
-
-            if (!adResponse.ok || adData.error) {
-                logger.error('publish', 'Ad creation error (flexible path)', { sid, metaError: serializeMetaError(adData), payload: adPayload });
-                return NextResponse.json(
-                    {
-                        error: adData.error?.message || 'Failed to create ad',
-                        errorType: adData.error?.type,
-                        errorCode: adData.error?.code,
-                        details: adData.error,
-                        fullResponse: adData,
-                    },
-                    { status: adResponse.status || 500 }
-                );
-            }
-
-            logger.info('publish', 'Ad created (flexible path)', { sid, adId: adData.id, adName });
-
-            return NextResponse.json({
-                success: true,
-                adId: adData.id,
-                adName,
-            });
         }
+
+        // Unreachable: the type was checked above
+        return NextResponse.json({ error: 'Unknown ad type' }, { status: 400 });
 
     } catch (error) {
         logger.error('publish', 'Publish error', { error: serializeError(error) });

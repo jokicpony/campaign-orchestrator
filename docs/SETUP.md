@@ -21,10 +21,9 @@ variables (step 6), each described in `.env.example`.
   non-commercial use. Publishing routes run for up to 300 seconds. As written,
   the app runs on Vercel only (see "Hosting somewhere other than Vercel").
 - A **GitHub** account for your copy of the code.
-- At least one AI key — [Gemini](https://aistudio.google.com/apikey),
-  [Anthropic](https://console.anthropic.com/) or
-  [OpenAI](https://platform.openai.com/api-keys) — or let each user add their
-  own in Settings.
+- A [Gemini API key](https://aistudio.google.com/apikey) for the copywriter —
+  one key for the whole team, kept on the server. Optional: without it the
+  copywriter is off and everything else works.
 - Locally: Node.js 22.6+, the [`gcloud` CLI](https://cloud.google.com/sdk/docs/install)
   (`gcloud auth login`) and the Firebase CLI (via `npx firebase-tools`,
   `npx firebase-tools login`).
@@ -101,8 +100,7 @@ One Google Cloud project serves as the Firebase project.
 
 ## 4. Google Cloud — Drive and keyless server access
 
-API routes read and write `serverSecrets` (each user's Meta token and personal
-AI keys) as a service account **without a key file**: Vercel's per-deployment
+API routes read and write `serverSecrets` (each user's Meta token) as a service account **without a key file**: Vercel's per-deployment
 OIDC token is exchanged for short-lived Google credentials (Workload Identity
 Federation; Vercel's guide: [Connect to GCP](https://vercel.com/docs/oidc/gcp)).
 Run as a project Owner:
@@ -141,8 +139,8 @@ echo "GCP_PROJECT_NUMBER=$PNUM  GCP_SERVICE_ACCOUNT_EMAIL=$SA"
 ```
 
 Because the binding names the production environment, preview deployments
-can't reach `serverSecrets`: Meta features return 503 and AI generation fails
-there. (To allow previews you'd add a second binding with
+can't reach `serverSecrets`: Meta features return 503 there (the copywriter
+still works). (To allow previews you'd add a second binding with
 `environment:preview`, preview environment variables, and the preview domain
 in Firebase's authorized domains and Meta's redirect URIs.)
 
@@ -188,7 +186,8 @@ token.
 | `GCP_PROJECT_ID` | the project ID |
 | `GCP_PROJECT_NUMBER`, `GCP_SERVICE_ACCOUNT_EMAIL` | printed at the end of step 4 |
 | `GCP_WORKLOAD_IDENTITY_POOL_ID`, `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID` | `vercel-pool`, `vercel-provider` |
-| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | at least one, unless every user brings their own |
+| `GEMINI_API_KEY` | your Gemini key (the copywriter is off without it) |
+| `GEMINI_MODEL`, `GEMINI_SUMMARY_MODEL` | optional — override the copywriter's model and the model that condenses context pages |
 
 Then **Deployments → ⋯ → Redeploy**. `NEXT_PUBLIC_*` values are baked in at
 build time, so redeploy whenever they change. If the Workload Identity
@@ -242,11 +241,12 @@ then redeploy. Later updates: `PROJECT_ID=<project-id> bash functions/transcode-
    ad account and Page. The star makes an ad account the team default.
 3. **Settings → Ad Setup:** ad naming and campaign naming templates, URL
    parameters (UTMs), Audience Defaults (minimum age).
-4. **Settings → Brand Voice, Products, Personas, Modifiers:** context for the
-   AI co-writer.
+4. **Settings → Copywriter:** brand voice, target personas and the kill list.
+   It also confirms the Gemini key works.
 5. Create a campaign tab, open **Assets** and paste a Google Drive folder URL,
-   build a row, switch to **Review** and mark it reviewed, then **Publish
-   Selected** to a new test campaign. Everything is created **paused** — check
+   build a row (try **Campaign Context** next to Add Row and **Fill this ad** in
+   the Palette's Copy tab), switch to **Review** and mark it reviewed, then
+   **Publish 1 reviewed** to a new test campaign. Everything is created **paused** — check
    it in Ads Manager, then delete it.
 
 If something fails, see [OPERATIONS.md → When something breaks](OPERATIONS.md#when-something-breaks).

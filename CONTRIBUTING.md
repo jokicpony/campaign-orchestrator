@@ -8,11 +8,11 @@ while.
 
 You'll need your own instance to test against: for UI work, at least a
 Firebase project with the rules deployed and Google sign-in on
-([docs/SETUP.md](docs/SETUP.md) steps 1–3); for anything touching Meta or AI
-generation, the whole setup — those need the server's secret store, which works
-on your production deployment or locally with ADC that can read Firestore
-(everything publishes paused). Then follow "Local development" in the
-[README](README.md).
+([docs/SETUP.md](docs/SETUP.md) steps 1–3); for anything touching Meta, the
+whole setup — it needs the server's secret store, which works on your
+production deployment or locally with ADC that can read Firestore (everything
+publishes paused). The copywriter needs only `GEMINI_API_KEY`. Then follow
+"Local development" in the [README](README.md).
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the pieces connect,
 [docs/META_API.md](docs/META_API.md) what is sent to Meta, and
@@ -26,7 +26,7 @@ There's no CI; please run these locally:
 ```bash
 npm run lint
 npx tsc --noEmit
-npm test          # offline checks for multi-media stacking and payloads
+npm test          # offline checks: multi-media, copywriter, top performers, request ids, Active Palette
 npm run build
 ```
 
@@ -38,6 +38,9 @@ Depending on what you touched:
   `scripts/probe-multi-media.mts validate` run (Meta checks the payload,
   creates nothing) is a good first step.
 - **Multi-media stacking or naming:** add cases to `scripts/test-multi-media.mts`.
+- **Copywriter prompts, parsing or page reading:** add cases to
+  `scripts/test-copywriter.mts` (it also checks the prompt prefix stays stable
+  for Gemini's cache).
 - **Auth, tokens or `firestore.rules`:** keep the model in
   [SECURITY.md](SECURITY.md) intact — no tokens or keys in the browser or in
   request bodies, no service-account key files, gates fail closed.

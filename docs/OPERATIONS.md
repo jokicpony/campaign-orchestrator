@@ -6,9 +6,11 @@ Meta changes its API. How the system works is in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Where things are in the app: **Settings** opens from your avatar menu (top
-right). Its tabs: Connections, Ad Setup, Archived, Brand Voice, Products,
-Personas, Modifiers. Build/Review is the toggle in the header; publishing
-starts from Review Mode (**Publish Selected**).
+right). Its tabs: Connections, Ad Setup, Copywriter (brand voice, target
+personas, kill list, and which Gemini model is in use), Usage (AI calls and
+estimated cost), Archived. Build/Review is the toggle in the header;
+publishing starts from Review Mode (**Publish N reviewed** in its header, or
+**Publish Selected** after picking ads in Overview).
 
 ## Users
 
@@ -34,8 +36,7 @@ To **remove** someone, **disable or delete them in Firebase console →
 Authentication → Users** — that ends their sessions. Editing the allowlist (or
 suspending their Workspace account) alone doesn't: a signed-in browser keeps
 getting fresh Firebase tokens, and a domain allowlist can't exclude one person.
-Then delete their `serverSecrets/{uid}` document (their stored Meta token and
-AI keys), take any individual address off the allowlists, and remove their
+Then delete their `serverSecrets/{uid}` document (their stored Meta token), take any individual address off the allowlists, and remove their
 business-portfolio access.
 
 ## Credentials to keep alive
@@ -43,8 +44,8 @@ business-portfolio access.
 - **Meta user tokens** last about 60 days; users reconnect when the app asks.
 - **The Drive token** lasts about an hour (no refresh token); Settings →
   Connections → Reconnect Drive.
-- **AI keys** in Vercel, and **`META_APP_SECRET`** — if you rotate one, update
-  Vercel and redeploy.
+- **`GEMINI_API_KEY`** and **`META_APP_SECRET`** in Vercel — if you rotate
+  one, update Vercel and redeploy.
 - **`TRANSCODE_API_KEY`** lives in two places (the function's secret and
   Vercel). Rotate both together; until they match, only videos over 50 MB fail.
 - **Admin access:** make sure more than one person can administer the Vercel
@@ -60,6 +61,9 @@ values are baked in at build.
 
 ## Upgrading
 
+**From 1.x to 2.0** read [CHANGELOG.md](../CHANGELOG.md) first: the AI setup,
+Settings tabs and ad types changed, and `storage.rules` must be deployed.
+
 Pull the latest code into your copy, run
 `npm run lint && npx tsc --noEmit && npm test && npm run build`, and push to
 deploy. Then check the commits you pulled for:
@@ -74,8 +78,9 @@ deploy. Then check the commits you pulled for:
   (`functions/transcode-and-upload/src/index.ts`).
 
 **Testing:** Workload Identity works only on the production deployment, so
-Meta features (503) and AI generation fail on previews, and locally unless your
-ADC can read Firestore. Everything publishes
+Meta features fail (503) on previews, and locally unless your ADC can read
+Firestore. The copywriter needs only `GEMINI_API_KEY`, so it works anywhere
+the key is set. Everything publishes
 **paused**, so testing in production is safe: publish to a test campaign,
 check it in Ads Manager, delete it.
 
@@ -90,13 +95,14 @@ only briefly (about a day on Pro), so copy what you need straight away.
 **"Reconnect Meta" / 401 `TOKEN_EXPIRED`.** The user's Meta token expired or was
 never stored. Settings → Connections → Connect Meta.
 
-**503 `TOKEN_STORE_UNAVAILABLE` on every Meta action** (and AI generation
-failing too). The server can't reach `serverSecrets`; reconnecting won't help.
+**503 `TOKEN_STORE_UNAVAILABLE` on every Meta action.** The server can't reach `serverSecrets`; reconnecting won't help.
 Check the five `GCP_*` variables (all must be set — a partial set is refused), that
 Vercel's OIDC Federation is on (Team mode), and that the Workload Identity
 provider and binding use your current Vercel team slug and project name
-(renaming either breaks them). On preview deployments and locally this is
-expected.
+(renaming either breaks them). On preview deployments this is expected.
+Locally it usually means `GCP_PROJECT_ID` is missing from `.env.local` (the
+server then looks in gcloud's default project), or your gcloud login can't
+read Firestore in this project.
 
 **Every API call returns 403.** The user isn't on the allowlist, or the
 `AUTHORIZED_*` variables are missing (an empty allowlist denies everyone in
@@ -136,17 +142,26 @@ and reproduce it with `scripts/probe-multi-media.mts validate`
 stay in Ads Manager (paused), and Drive files may already be renamed.
 Re-publishing a row creates a new ad.
 
-**AI generation fails.** "No API key configured" → add a server key or a
-personal key (Settings → Brand Voice). A 404 for a model → the model id was
-retired; update `AVAILABLE_AI_MODELS` in `src/types/index.ts`.
+**The copywriter fails.** Settings → Copywriter says what's wrong: no
+`GEMINI_API_KEY` (set it and redeploy), a rejected key, or a model the key
+can't use. If the default model is retired the copywriter falls back to the
+fallback model in `src/lib/ai/gemini.ts` on its own; set `GEMINI_MODEL` to one
+of the models Settings lists (no code change). Logs carry the full error under
+`ai`.
+
+**A Campaign Context link shows an error.** The server couldn't read the page
+(private address, login wall, not a web page or PDF, slower than 5 s, or a PDF
+over 14 MB or slower than 15 s); paste the facts into the notes instead. A
+Google Drive or Docs link has to be shared as "Anyone with the link", and a
+Drive folder can't be read, only a file in it. "This site is blocking automatic
+reads right now" (a 401, 403 or 429) from a Shopify store is usually its bot
+check after many reads in a short time; wait a few minutes and press Read
+again. A link that reads but isn't labelled as a fact sheet means the summary
+failed (logs: `Page summary failed`) and the cleaned page text was used
+instead.
 
 ### Known issues
 
-- Single Image / Single Video rows accept 3 assets but publish only the first.
-  Use Multi-Media for several shapes of one creative.
-- Settings → Connections always shows AI as "not configured" (the status check
-  is sent without the auth token); generation itself works.
-- "No product" / "No persona" in the AI Co-Writer doesn't clear the selection.
 - The campaign lock blocks saving, not editing.
 - Drive files are renamed before Meta confirms the ad.
 - No campaign-level undo.
@@ -168,22 +183,29 @@ retired; update `AVAILABLE_AI_MODELS` in `src/types/index.ts`.
   A major move means editing those two places, redeploying the function and
   testing a >50 MB video. Watch the Next.js blog's security releases:
   `npm audit` has missed advisories for days after they were announced.
-- **`npm audit` findings accepted as not applicable:** `@grpc/grpc-js` 1.9
-  under `firebase` (Firebase pins `~1.9`; both advisories are gRPC-server
-  behaviours and the browser SDK talks WebChannel) and `uuid` under the
-  function's `cloudevents` (only `v3/v5/v6` with a caller buffer).
-  `@vercel/oidc`'s pinned zod is lifted by an `overrides` entry in
-  `package.json`.
-- **The Flexible ad type** relies on a field Meta no longer documents
-  (`creative_asset_groups_spec`); it may stop working at a version sunset.
-  Multi-Media replaces it.
-- **AI model ids** go stale; refresh `AVAILABLE_AI_MODELS` now and then.
+- **`npm audit` and `overrides`** (November 2026): `npm audit --omit=dev`
+  is clean. Firebase (up to 13.1) still pins `@grpc/grpc-js ~1.9`, so an
+  `overrides` entry in `package.json` lifts it to `^1.14.7` under
+  `@firebase/firestore`; another lifts `google-gax`'s `rimraf` and its `glob`
+  (listed but never loaded) past the glob/minimatch advisories; a third lifts
+  `@vercel/oidc`'s pinned zod. Drop an entry once its parent ships the fix,
+  and never run `npm audit fix --force` (it downgrades Firebase to 9). Still
+  flagged and accepted: `minimatch` under ESLint 9 and its plugins (dev only,
+  never shipped) and `uuid` under the function's `cloudevents` (only
+  `v3/v5/v6` with a caller buffer).
+- **Gemini model ids and prices** go stale (preview models are shut down, old
+  ids 404). The default and fallback live in `src/lib/ai/gemini.ts`;
+  `GEMINI_MODEL` overrides without a code change. Settings → Usage costs come
+  from the dated price list in `src/lib/ai/usage.ts` — update it when Google
+  changes prices or you change the model (an unknown model counts tokens but
+  shows no cost).
 
 ## Design decisions
 
 - **Everything publishes paused.** A person turns ads on in Ads Manager.
-- **Secrets stay server-side** — Meta tokens and personal AI keys in
-  `serverSecrets`, reached through Workload Identity; no key files anywhere.
+- **Secrets stay server-side** — Meta tokens in `serverSecrets`, reached
+  through Workload Identity; the Gemini key is a server env var; no key files
+  anywhere.
 - **Gates fail closed** — no allowlist means no access.
 - **No roles** — everyone on the allowlist can use every feature, including
   team-wide Settings. Built for a small, trusted team.
@@ -193,3 +215,10 @@ retired; update `AVAILABLE_AI_MODELS` in `src/types/index.ts`.
   manual stacking yet.
 - **Three ads publish at a time** (`PUBLISH_CONCURRENCY`), conservative for
   Meta's rate limits.
+- **The copywriter is Gemini only, with one server-side key.** No provider or
+  model picker, no personal keys, no temperature or modifier knobs: you steer
+  it in words. Settings keep only brand voice, target personas and the kill
+  list; product facts come from each campaign's Context links instead of a
+  product catalog.
+- **Flexible is retired.** Multi-Media replaced it; saved Flexible rows open
+  as Multi-Media and the publish route rejects `flexible`.

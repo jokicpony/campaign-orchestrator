@@ -8,7 +8,7 @@ in [OPERATIONS.md](OPERATIONS.md); Meta payload details are in
 ## The one-sentence version
 
 A team builds Meta ads in a shared browser workspace — creative from Google
-Drive, copy from past top performers and an AI co-writer — reviews them, then
+Drive, copy from past top performers and an AI copywriter — reviews them, then
 publishes them to Meta through the Marketing API, always **PAUSED**.
 
 Firestore holds the workspace (campaigns, rows, settings). Drive holds the
@@ -28,7 +28,9 @@ files itself; at publish they go Drive → Meta server-to-server.
                                                /api/meta/*  ── Meta token ────▶ Meta Graph API v25
                                                  │  read from serverSecrets via
                                                  │  Workload Identity (no key)
-                                               /api/ai/generate ─────────────▶ Gemini / Claude / OpenAI
+                                               /api/ai/copy ─ GEMINI_API_KEY ▶ Gemini
+                                                 (also reads public pages
+                                                  for campaign context)
                                                /api/meta/upload (>50 MB video) ▶ Cloud Function
                                                                                  (ffmpeg → Meta)
 ```
@@ -43,7 +45,7 @@ files itself; at publish they go Drive → Meta server-to-server.
 | Google Drive | Source of all creative; files are renamed to the ad name at publish | `src/lib/google/driveService.ts` |
 | Meta Marketing API | Campaigns, ad sets, image/video upload, ads, insights. Version pinned in `src/lib/meta/constants.ts` | `src/lib/meta/`, `src/app/api/meta/` |
 | Transcode function | GCP Cloud Function (gen2): streams a >50 MB video from Drive, re-encodes with ffmpeg, uploads to Meta | `functions/transcode-and-upload/` |
-| AI providers | Copy generation through the Vercel AI SDK | `src/app/api/ai/`, `src/lib/ai/` |
+| Gemini | The copywriter, through the Vercel AI SDK, with one team key from the server env | `src/app/api/ai/copy/`, `src/lib/ai/` |
 
 ## Who is allowed to do what
 
@@ -64,20 +66,21 @@ Four separate gates. Each fails closed.
    | `campaigns/{id}`, `settings/global` | any team member |
    | `users/{uid}/**` | that user only |
    | `serverSecrets/{uid}` | **no client, ever** — backend only |
+   | `aiUsage/*` | no client — the backend writes it, Settings reads it through `/api/ai/usage` |
    | everything else | denied |
 
    "Team member" (`isTeamMember()`) is a verified email matching the allowlist
-   **written into the rules file** — rules can't read env vars, so the
-   allowlist is repeated in `firestore.rules`, `storage.rules` and the env vars,
-   and must be kept in sync by hand.
+   **written into the rules files** — rules can't read env vars, so the
+   allowlist is repeated in `firestore.rules`, `storage.rules` (the thumbnail
+   cache: team-only, images under 5 MB) and the env vars, kept in sync by hand.
 3. **Secrets never reach the browser.** Each user's Meta long-lived token
-   (~60 days) and their own AI provider keys live in
-   `serverSecrets/{uid}`. API routes reach it as a service account through
+   (~60 days) lives in `serverSecrets/{uid}`; the team's Gemini key is a
+   server env var (`GEMINI_API_KEY`). API routes reach it as a service account through
    **Workload Identity Federation**: Vercel's per-deployment OIDC token is
    exchanged for short-lived Google credentials
    (`src/lib/server/gcpFirestore.ts`). There is no service-account key file
-   to leak or rotate. The binding covers the **production** deployment only;
-   locally the code uses Application Default Credentials.
+   to leak or rotate. The binding covers the **production** deployment
+   only; locally the code uses Application Default Credentials.
    Anyone with Owner, Editor or Firestore access on the Google Cloud project
    can also read `serverSecrets` — keep the project's IAM list as small as the
    team allowlist.
@@ -94,12 +97,13 @@ Firestore (Native mode). Types are in `src/types/index.ts`.
 
 | Path | Holds | Written by |
 |---|---|---|
-| `campaigns/{id}` | A workspace tab: `name`, `status`, `archiveStatus`, `position`, `brief` (product, context, `driveFolderUrl`), `palette` (copy library), `rows[]`, lock fields (`lockedBy`, `lockedByName`, `lockedAt`) | Client |
+| `campaigns/{id}` | A workspace tab: `name`, `status`, `archiveStatus`, `position`, `brief` (`keyMessages` = the copywriter's notes, `contextLinks`, `contextPages` = the text read from those links and row landing pages, `driveFolderUrl`), `palette` (copy library), `rows[]`, lock fields (`lockedBy`, `lockedByName`, `lockedAt`) | Client |
 | `campaigns/{id}.rows[]` | One ad: `assets[]` (Drive file id, name, dimensions…), `slots` (5 primary texts, 5+ headlines), `adType`, URL, `callToAction`, `namingValues`, `generatedAdName`, `reviewStatus`, `comments[]`, `lastPublishedAt`, `metaAdId` | Client |
-| `settings/global` | Team-wide settings: brand voice, kill list, products, personas, modifiers, ad-type aliases, naming templates, URL parameters, `defaultAdAccountId`, `defaultAgeMin`, AI provider/model | Client (Settings modal) |
+| `settings/global` | Team-wide settings: `brandVoice`, `targetPersonas`, `killList`, ad-type aliases, naming templates, URL parameters, `defaultAdAccountId`, `defaultAgeMin` | Client (Settings modal) |
 | `users/{uid}` | Profile | Client |
 | `users/{uid}/integrations/meta` | Meta connection **metadata**: ad accounts, Pages (with Instagram ids), selections, expiry. No token | Client, from the OAuth redirect |
-| `serverSecrets/{uid}` | `meta.accessToken` + `expiresAt`; `providerKeys` (the user's own AI keys) | Backend only |
+| `serverSecrets/{uid}` | `meta.accessToken` + `expiresAt` (older docs may still hold an unused `providerKeys`) | Backend only |
+| `aiUsage/{day}_{model}` | One model's AI usage for one UTC day, team-wide: `kinds.{write,fill,story,page}` (calls, input, cached and output tokens, `costMicros`) and `people.{uid}` (email, calls, `costMicros`). No copy text | Backend only (`src/lib/server/aiUsage.ts`); read via `GET /api/ai/usage` |
 
 Browser storage: the Drive token in `localStorage` (`mco.driveToken`, 55 min)
 and mirrored into a `SameSite=Strict` cookie scoped to `/api/video-proxy`.
@@ -131,32 +135,147 @@ and mirrored into a `SameSite=Strict` cookie scoped to `/api/video-proxy`.
 
 ## Flow 2 — Building ads (Build Mode)
 
-Campaign tabs across the top are shared Firestore documents. Opening one takes
-a **soft lock** (10 minutes, refreshed every 2) so two people don't overwrite
+Campaign tabs across the top are shared Firestore documents. A reload reopens
+the campaign you last had open in that browser (or the first tab). Opening one
+takes a **soft lock** (10 minutes, refreshed every 2) so two people don't overwrite
 each other; others see a view-only banner and their saves are refused. Edits
 apply locally at once and save to Firestore after 3 seconds of quiet
-(`src/app/page.tsx`).
+(`src/app/page.tsx`). Pending edits are saved straight away before anything
+changes the open campaign (switching, adding, closing or archiving a tab) and
+when the browser tab closes, which also shows the browser's "Leave site?"
+prompt. Pending saves are queued per campaign (`useCampaigns`), so a save
+that fails is retried on the next change into the campaign it came from.
 
-Build Mode has four tabs and a Palette panel:
+Build Mode has three tabs and a Palette panel (which holds the copywriter):
 
 - **Assets** — paste a Drive folder URL; the app lists the images and videos
   directly in it (not subfolders), with pixel dimensions and durations from
   Drive. Thumbnails are cached in Firebase Storage.
-- **AI Co-Writer** — pick a product, persona and up to two modifiers, write a
-  brief, and generate headlines/primary texts. `/api/ai/generate` streams from
-  the team's chosen provider using the user's own key if they set one, else
-  the server's env key. Brand voice and the kill list come from
-  `settings/global`; kill-listed words are also filtered out of the output.
-  Accepted options go into the Palette.
 - **Assembly** — the rows. Each row is one ad: assets (picked in order — the
-  first asset leads), up to 5 primary texts and 5 headlines dragged in from the
-  Palette, destination URL, CTA, ad type, and a name built from the naming
-  template.
+  first asset leads), up to 5 primary texts and 5 headlines (dragged in from
+  the Palette or the copywriter, or typed straight into an empty slot),
+  destination URL, CTA, ad type, and a name built from the naming template.
+  Each copy column shows its filled slots plus one empty one (a carousel shows
+  one headline per card and one primary text), so empty rows stay short.
+  The name (`generatedAdName`) saves itself once the row has an angle name
+  and a type, or once someone opens the naming panel; `handleUpdateRow`
+  builds on `campaignRef`, so several rows saving names in one render don't
+  overwrite each other. Copy typed or used in a row also joins the Palette's
+  Active list.
 - **Ad Namer** — a standalone name builder (copy to clipboard only).
-- **Palette** — the campaign's copy library: **Top Performers** (last 90
-  days of the ad account's copy, by spend, via insights `body_asset` /
-  `title_asset` breakdowns) and **Active** (copy accepted or added for this
-  campaign).
+- **Palette** — everything about copy, built around one **selected ad**
+  (picked at the top of the Palette; it follows the row you click or type
+  in, a row's sparkle button, and a new or duplicated row; it shows how full
+  that ad's slots are). Two tabs. **Copy** switches between three
+  views, one at a time at full width: **Top performers** (the default; last
+  90 days of the ad account's copy via insights `body_asset` /
+  `title_asset` breakdowns. **Import** sits beside the search box and can
+  filter to ads whose ad or campaign name contains a product;
+  `src/lib/meta/topCopy.ts` merges identical copy across ads, then keeps, per
+  type, the biggest spenders that together cover 80% of that type's spend, at
+  most 15, with spend-weighted ROAS. The result, or why nothing came in,
+  shows under the search box), the **Copywriter**, and **Write your own**
+  (`WriteYourOwn.tsx`: type a headline or primary text, then Use it in the
+  selected ad; it lists the campaign's hand-written copy). **Active** lists
+  the copy this campaign uses and edits it (`ActivePalette.tsx`, view logic
+  in `src/lib/activePalette.ts`): copy in at least one ad on top, copy in no
+  ad folded under **Unused** (two-click **Clear unused**); filters for type,
+  source (Top performers, Copywriter, Yours) and **This ad**; sorts Most used,
+  Newest (order it joined Active) and Top performance (spend, then ROAS);
+  search from 15 cards; each card's "In 02 05" jumps to and selects that ad.
+  The filters live in the Palette, so they survive tab switches. Copy joins
+  Active by being used (Use, or a drop on a slot); there is no separate
+  "add to Active". Every card — top performer, AI result, hand-written or Active — has
+  **Use** (fills the selected ad's next
+  empty slot of that type and joins Active; it reads "In ad" or "Full"
+  instead when that applies, via `CopyTarget.tsx`) and **Riff on this**
+  (variations for the selected ad). Cards can still be dragged onto a slot.
+  Headlines are blue and primary text orange wherever copy shows (cards,
+  type filters, row column labels and filled slots, Review), from
+  `src/components/copyType.ts`.
+  **Split** widens the Palette to half the screen (remembered per browser);
+  rows narrower than 48rem move their URL and CTA under the copy (a container
+  query in `AdRow`).
+- **Copywriter** (`src/components/BuildMode/Copywriter/`) — one conversation
+  per campaign, writing for the selected ad. It stays mounted while hidden,
+  so switching tabs or collapsing the Palette keeps the conversation. You
+  ask in plain words, then **Use** a result or drag it onto a slot.
+  **Fill this ad** opens a "Fill with…" menu: Any angle, then the angles in
+  `FILL_ANGLES` (`src/lib/ai/prompts.ts`; Riff on top performers shows only
+  once Top performers are imported or the ad holds one, Something different
+  only once the ad has copy). Picking one asks for exactly one piece per
+  empty slot the ad will publish (`fillCounts` / `fillInstruction`, capped
+  like a normal ask), each piece different in angle, format and length
+  (`fillVariety`; lengths stay within the limits, unless the direction sets
+  the length), with the angle plus anything typed in the box as its
+  direction, and puts the results in those slots in order, skipping copy
+  already in the ad. It waits until the ad has a type, since the type
+  decides how many slots publish. **Long-form story** (under Fill, and a
+  pill beside it later) is its own path: it asks for the story in the box
+  ("Write story"), then writes one story-driven long read as primary text
+  (`longFormInstruction`) for you to Use; Fill never writes long-form.
+  Follow-ups: Fill this ad (the same menu), Long-form story, Wilder, Safer,
+  Shorter, More like top performers.
+
+  The campaign's **Campaign Context** (the button next to Add Row on the Assembly
+  Line, `src/components/BuildMode/CampaignContext.tsx`; the copywriter's
+  Context links open it there) holds up to 5 links and free-text notes per
+  campaign (and can copy them from another campaign); the server reads each
+  link once (`POST /api/ai/copy` `pages`) and the campaign stores the result
+  in `brief.contextPages`. The row's landing page is read the same way on its
+  first write.
+
+  Reading a page: `htmlToPageText` (`src/lib/ai/pageText.ts`) keeps `<main>`
+  when there is one (otherwise drops the header, cart and newsletter chrome),
+  pulls JSON-LD Product/ProductGroup facts (price, options, rating) and strips
+  button and carousel leftovers, up to 30,000 characters. Pages of 1,500+
+  characters then go to a Flash model (`gemini-3.8-flash`, or
+  `GEMINI_SUMMARY_MODEL`), which names the page type (product, collection,
+  brand/about, sale or landing, article, reviews, other) and writes a fact
+  sheet with only the sections that fit, numbers and quotes kept exact. The
+  sheet is stored as the page's `text` with `summarized: true` — once per
+  page, never per write. If the summary fails the cleaned text is stored
+  instead (capped at 6,000 characters). Context shows each page's text.
+
+  Google links (`src/lib/server/googleLinks.ts`) open JavaScript viewers, so
+  the server reads the file behind them: Docs and Slides as plain text,
+  Sheets as CSV (the linked tab), Drive files as a download. A PDF (from
+  Drive or any site, told by its first bytes; up to 14 MB, 15 s) goes to the
+  same Flash model as a file and gets the same fact sheet; with no sheet
+  there's no text to fall back on, so the link shows an error. Only files
+  shared as "Anyone with the link" work (others end on Google's sign-in
+  page); folders are refused.
+
+  `/api/ai/copy` `write` streams from Gemini with the team key. The prompt
+  is ordered so that Gemini's implicit cache can reuse it: system (rules,
+  brand voice, target personas, kill list), then the campaign context
+  (notes, the top 12 performers by spend, link pages inside `<page>` tags,
+  which the rules say are data, not instructions), then the recent
+  conversation, then the row (its winners, other copy, landing page unless
+  it's already a Context link) and the ask last. The rules ask for primary
+  text of 125 characters or fewer (what the Review preview shows before
+  "See more") unless the ask wants longer copy, never over 2,000; a
+  long-form story is a story-driven read of 800 to 2,000 characters with
+  the hook in the first 125. Rows give primary text past 125 a quiet note
+  ("N chars · See more", or "Long read" from 500) and flag it red only past
+  Meta's 2,200 maximum (`META_CHAR_LIMITS`). Rows and Review keep the
+  copy's line breaks.
+  Kill-listed words are also filtered out of the output. The model
+  is `gemini-4-argon` unless `GEMINI_MODEL` overrides it; if that model 404s
+  the route falls back to `gemini-3.8-flash` and Settings → Copywriter says so.
+
+  **Usage.** Every copy call and page summary adds its tokens to that day's
+  `aiUsage` document for its model (`recordAiUsage`: increments, at most 3 s,
+  never fails the request), with an estimated cost at that day's list price
+  (`src/lib/ai/usage.ts`, which holds Argon's and Flash's dated prices).
+  Settings → Usage shows the last 7 or 30 days for the whole team: by model,
+  by use (asks, Fill, long-form, page summaries), cache share, and by person.
+  Local dev with ADC writes to the same Firestore, so local calls count too.
+
+  Page reading (`src/lib/server/safeFetch.ts`) accepts any public http(s) URL
+  on ports 80/443 and refuses private, loopback, link-local and metadata
+  addresses, checked on the address actually connected to and again on every
+  redirect (max 3), with a 5 s / 1 MB / HTML-or-text limit.
 
 Ad types (`src/types/ad-types.ts`; Settings → Ad Setup edits the naming
 alias and description — saved values override the built-ins, except
@@ -165,21 +284,35 @@ alias and description — saved values override the built-ins, except
 | Type | Assets | Publishes as |
 |---|---|---|
 | Multi-Media | up to 10 images + videos; same-name shapes auto-stack | one ad with `media_sourcing_spec` |
-| Flexible | up to 10 images + videos | `creative_asset_groups_spec` (Meta's compatibility shim) |
 | Carousel | 2–10 cards; headline N pairs with card N; one primary text | `child_attachments` |
-| Single Image / Single Video | picker allows 3, **only the first publishes** | `asset_feed_spec` + Advantage+ text variations |
+| Single Image / Single Video | one asset; a row holding more (saved before Nov 2026, or switched from another type) publishes only the first and says so | `asset_feed_spec` + Advantage+ text variations |
+
+Flexible (`creative_asset_groups_spec`) was retired in Nov 2026 once
+Multi-Media had proven itself in real publishes. Rows saved as Flexible open
+as Multi-Media (`retireFlexible`, applied when campaigns are read in
+`src/lib/firebase/firestore.ts`), a row with no type fails in the wizard
+instead of falling back to Flexible, and the publish route answers 400 to
+`flexible`.
 
 ## Flow 3 — Review
 
-Review Mode shows each row as a large card. Reviewers leave feedback (row →
+Review Mode shows each row as a large card. On screens 1280px and wider it
+has two columns: a feed-style preview on the left (`ReviewMode/AdPreview.tsx`:
+primary text cut at about 125 characters behind "See more", the selected
+asset, then the domain, headline and the row's CTA; carousels show the
+selected card with its own headline, other types step through the primary
+text and headline mixes), with asset navigation and multi-media stacks
+under it; the ad name, every copy option, the URL, comments and Mark
+Reviewed on the right. Narrower screens stack the two. Reviewers leave feedback (row →
 `needs_changes`), builders reply (→ `pending`), reviewers **Mark Reviewed**
 (→ `reviewed`). Rows where the builder replied last sort first. Only reviewed
 rows can be selected for publishing — a UI rule, not enforced server-side.
 
 ## Flow 4 — Publishing
 
-Selecting reviewed rows in Review Mode and clicking **Publish Selected** opens
-the wizard (`src/components/PublishWizard/`): four steps, then a results
+In Review Mode, **Publish N reviewed** in the header (every reviewed row
+without `lastPublishedAt`), or selecting reviewed rows in Overview and
+clicking **Publish Selected**, opens the wizard (`src/components/PublishWizard/`): four steps, then a results
 screen. Each step calls API routes.
 
 1. **Target** — a new campaign (named from the campaign naming template), or
@@ -224,9 +357,13 @@ are in Vercel → Logs, and each publish carries a short `sid`.
 
 ## Rules that keep it working
 
-- **Everything is created PAUSED.** Campaign and ad-set routes hardcode it;
-  the wizard always sends PAUSED for ads. A human turns things on in Ads
+- **Everything is created PAUSED.** The campaign, ad-set and ad routes all
+  hardcode it, whatever the request says. A human turns things on in Ads
   Manager.
+- **Ids from the browser are checked before they go into a URL.** Ad account,
+  campaign, ad set and video ids must look like Meta ids, and Drive file ids
+  like Drive ids (`src/lib/server/ids.ts`), so a crafted id can't point a
+  server call made with someone's Meta token at another Graph endpoint.
 - **Asset order is meaning.** The first asset is an ad's lead media; carousel
   cards pair with headlines by position. The asset picker keeps click order —
   don't let anything re-sort `row.assets`.
@@ -256,7 +393,8 @@ are in Vercel → Logs, and each publish carries a short `sid`.
 | Meta OAuth, scopes, token storage | `src/app/api/auth/meta/`, `src/lib/server/metaTokenStore.ts`, `metaAuth.ts` |
 | Who can sign in / use the API | `src/lib/server/verifyAuth.ts`, `firestore.rules`, Vercel env |
 | Drive listing, renames, transfers | `src/lib/google/driveService.ts`, `src/app/api/drive/rename/`, `src/app/api/meta/upload/from-drive/` |
-| AI models and prompts | `src/types/index.ts` (`AVAILABLE_AI_MODELS`), `src/lib/ai/`, `src/app/api/ai/generate/route.ts` |
+| The copywriter (model, prompt, page reading) | `src/lib/ai/gemini.ts`, `src/lib/ai/prompts.ts`, `src/app/api/ai/copy/route.ts`, `src/lib/server/safeFetch.ts`, `scripts/test-copywriter.mts` |
+| Which imported Top performers are kept | `src/lib/meta/topCopy.ts`, `scripts/test-top-performers.mts`, `src/app/api/meta/top-performers/route.ts` |
 | Ad types and limits | `src/types/ad-types.ts` |
 | Rows, slots, review state | `src/components/BuildMode/AssemblyLine/`, `src/components/ReviewMode/`, `src/types/index.ts` |
 
@@ -271,7 +409,7 @@ are in Vercel → Logs, and each publish carries a short `sid`.
 | DOF | `degrees_of_freedom_spec` — the part of a creative that opts in to Advantage+ enhancements |
 | `fbtrace_id` | Meta's id for one failed request; quote it when asking Meta support |
 | `promoted_object` | What an ad set optimises for — a pixel event or a Page |
-| Shim | Meta still accepting an old field (Flexible's `creative_asset_groups_spec`) and converting it |
+| Shim | Meta still accepting an old field and converting it (the retired Flexible type relied on `creative_asset_groups_spec`) |
 | `sid` | The short id on every log line of one publish request |
 | Stack | Shapes of one creative (1:1, 9:16…) grouped in a Multi-Media ad so Meta serves the right one per placement |
 | WIF | Workload Identity Federation — how the server gets Google credentials without a key file |
